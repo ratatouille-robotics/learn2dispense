@@ -1,4 +1,3 @@
-
 import sys
 import gym
 import time
@@ -126,6 +125,7 @@ class PPO(BaseAlgorithm):
         self.vf_coef = vf_coef
         self.max_grad_norm = max_grad_norm
         self.rollout_buffer = None
+        self.env = env
 
         # Sanity check, otherwise it will lead to noisy gradient and NaN
         # because of the advantage normalization
@@ -198,7 +198,25 @@ class PPO(BaseAlgorithm):
         rollout_buffer: RolloutBuffer,
         n_rollout_steps: int,
     ) -> bool:
-        pass
+        
+        self.policy.set_training_mode(False)
+        rollout_buffer.reset()
+
+        rollout_data = self.env.interact(n_rollout_steps)
+
+        for i in range(len(rollout_data)):
+            rollout_buffer.add(
+                obs=rollout_data["obs"][i],
+                action=rollout_data["action"][i],
+                reward=rollout_data["reward"][i],
+                episode_start=rollout_data["episode_start"][i],
+                value=rollout_data["value"][i],
+                log_prob=rollout_data["log_prob"][i],
+            )
+
+
+        
+
 
     def train(self) -> None:
         """
