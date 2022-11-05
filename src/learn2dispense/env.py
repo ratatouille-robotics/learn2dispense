@@ -68,12 +68,12 @@ class Environment:
 
             if success:
                 for k, v in rollout_data.items():
-                    if k in rollout_data:
+                    if k in data:
                         data[k].append(v)
                     else:
                         data[k] = [v]
                 
-                current_steps += len(rollout_data["state"])
+                current_steps += len(rollout_data["obs"])
 
         for k, v in data.items():
             data[k] = np.concatenate(v, axis=0)

@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>learn_to_dispense</name>
+  <name>learn2dispense</name>
   <version>0.0.0</version>
-  <description>The learn_to_dispense package</description>
+  <description>The learn2dispense package</description>
 
   <!-- One maintainer tag required, multiple allowed, one person per tag -->
   <!-- Example:  -->

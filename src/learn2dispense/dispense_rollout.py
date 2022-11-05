@@ -84,10 +84,10 @@ class Dispenser:
         
         state = [self.rollout_data[k] for k in self.STATE_DATA]
         state = np.concatenate(state, axis=1)
-        outputs["state"] = state
+        outputs["obs"] = state
 
-        outputs["done"] = np.zeros(len(outputs["state"]), dtype=np.float32)
-        outputs["done"][-1] = 1
+        outputs["episode_start"] = np.zeros(len(outputs["obs"]), dtype=np.float32)
+        outputs["episode_start"][0] = 1
 
         return outputs
 

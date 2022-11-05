@@ -12,7 +12,7 @@ from torch.nn import functional as F
 from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.buffers import DictRolloutBuffer, RolloutBuffer
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.policies import ActorCriticCnnPolicy, ActorCriticPolicy, BasePolicy, MultiInputActorCriticPolicy
+from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.type_aliases import MaybeCallback, Schedule
 from stable_baselines3.common.utils import explained_variance, get_schedule_fn
 
@@ -68,12 +68,6 @@ class PPO(BaseAlgorithm):
         Setting it to auto, the code will be run on the GPU if possible.
     :param _init_setup_model: Whether or not to build the network at the creation of the instance
     """
-
-    policy_aliases: Dict[str, Type[BasePolicy]] = {
-        "MlpPolicy": ActorCriticPolicy,
-        "CnnPolicy": ActorCriticCnnPolicy,
-        "MultiInputPolicy": MultiInputActorCriticPolicy,
-    }
 
     def __init__(
         self,
@@ -213,10 +207,6 @@ class PPO(BaseAlgorithm):
                 value=rollout_data["value"][i],
                 log_prob=rollout_data["log_prob"][i],
             )
-
-
-        
-
 
     def train(self) -> None:
         """
