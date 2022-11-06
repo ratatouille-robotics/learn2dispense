@@ -6,6 +6,7 @@ import numpy as np
 
 from typing import Dict
 from motion.commander import RobotMoveGroup
+from motion.utils import offset_pose, offset_joint, make_pose
 from learn2dispense.dispense_rollout import Dispenser
 
 
@@ -15,103 +16,107 @@ class Environment:
     Generates data samples for learning by interacting with the environment.
     """
 
-    HOME = [-1.2334, -2.2579, 2.1997, -2.6269, -0.3113, 2.6590]
+    HOME = [-0.5992, -2.4339, 2.2566, -2.9490, -1.0004, 3.0982]
+    SHELF_FRONT = [-0.05481, -2.0645, 2.480, -3.2914, 0.0045, 2.8663]
+    CONTAINER_SHELF_POSE_1 = [-0.144, -0.472, 0.477, 0.729, -0.004, -0.008, 0.685]
+    CONTAINER_SHELF_POSE_2 = [-0.291, -0.472, 0.477, 0.729, -0.004, -0.008, 0.685]
+    CONTAINER_SCALE_POSE = [-0.436, 0.029, 0.214, -0.498, 0.521, 0.498, -0.482]
 
     MIN_DISPENSE_WEIGHT = 10
     MAX_DISPENSE_WEIGHT = 100
     REFILL_THRESHOLD = 10
+    EMPTY_CONTAINER_WEIGHT = 117
 
-    def __init__(self, log_dir: pathlib.Path) -> None:
+    def __init__(self, log_dir: pathlib.Path, pick_container_on_start: bool = False) -> None:
         self.log_dir = log_dir
-
-        self.container_wt = 0
         self.robot_mg = RobotMoveGroup()
         self.dispenser = Dispenser(self.robot_mg)
-        self.container_wt = self.refill_container()
+        self._pre_process()
 
-        self.pose1 = [-0.14, -0.485, 0.42, 0.7071068, 0.0, 0.0, 0.7071068]
-        self.pose2 = [-0.29, -0.47, 0.42, 0.7071068, 0.0, 0.0, 0.7071068]
+        assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=False)
 
-        self.pose_on_scale = [0, 0, 0, 0, 0, 0]
-
-        assert self.robot_mg.go_to_joint_state(
-            self.HOME, cartesian_path=True, velocity_scaling=0.15
-        )
+        if pick_container_on_start:
+            # To start with, pick and place empty container on weighing scale
+            self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
+            self.place_container_on_scale()
+            # Pick full container for dispensing
+            self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1, return_home=True)
 
         # Load ingredient-specific params
         config_dir = pathlib.Path(__file__).parent.parent.parent
         with open(config_dir / "config/lentil_params.yaml") as f:
             self.ingredient_params = yaml.safe_load(f)
 
-    def pick_container(self, pick_pose):
+    def _pre_process(self):
+        self.CONTAINER_SCALE_POSE = make_pose(self.CONTAINER_SCALE_POSE[:3], self.CONTAINER_SCALE_POSE[3:])
+        self.CONTAINER_SHELF_POSE_1 = make_pose(self.CONTAINER_SHELF_POSE_1[:3], self.CONTAINER_SHELF_POSE_1[3:])
+        self.CONTAINER_SHELF_POSE_2 = make_pose(self.CONTAINER_SHELF_POSE_2[:3], self.CONTAINER_SHELF_POSE_2[3:])
+
+    def pick_container_from_shelf(self, pick_pose, return_home: bool=False):
         # Open gripper
-        self.robot_mg.open_gripper(wait=False)
-
-        # Intermediate pose?
-
+        self.robot_mg.open_gripper(wait=True)
         # Go to designated pose
-        if not self.robot_mg.go_to_pose_goal(
-            pick_pose,
-            acc_scaling=0.1,
-            velocity_scaling=0.9,
-        ):
-            print("Error moving to pose goal")
-            return
-
+        assert self.robot_mg.go_to_joint_state(self.SHELF_FRONT, cartesian_path=False)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.2, 0.0]), cartesian_path=False)
+        assert self.robot_mg.go_to_pose_goal(pick_pose, wait=True)
         # Close gripper
-        self.robot_mg.close_gripper(wait=False)
+        assert self.robot_mg.close_gripper(wait=True)
+        # Retract
+        assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.0, 0.015]))
+        assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.2, 0.015]))
+        if return_home:
+            assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=False)
 
-    def place_container(self, place_pose):
-        # Intermediate pose?
-
+    def place_container_on_shelf(self, place_pose, return_home: bool=False):
         # Go to designated pose
-        if not self.robot_mg.go_to_pose_goal(
-            place_pose,
-            acc_scaling=0.1,
-            velocity_scaling=0.9,
-        ):
-            print("Error moving to pose goal")
-            return
-
-        # Open gripper and place container
-        self.robot_mg.open_gripper(wait=False)
-
-    def pick_and_place_container(self, pick_pose, place_pose):
+        assert self.robot_mg.go_to_joint_state(self.SHELF_FRONT, cartesian_path=False)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0.2, 0.015]))
+        assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0, 0.015]))
+        assert self.robot_mg.go_to_pose_goal(place_pose)
         # Open gripper
-        self.robot_mg.open_gripper(wait=False)
+        self.robot_mg.open_gripper(wait=True)
+        # Retract
+        assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0.2, 0]))
+        if return_home:
+            assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=False)
 
-        # Go to intermediate pose?
+    def pick_container_from_scale(self):
+        # Open gripper
+        self.robot_mg.open_gripper(wait=True)
+        # Go to designated pose
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0.0, 0.15]), orient_tolerance=0.05)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0.0, 0]), orient_tolerance=0.05)
+        assert self.robot_mg.go_to_pose_goal(self.CONTAINER_SCALE_POSE, orient_tolerance=0.05)
+        # Close gripper
+        assert self.robot_mg.close_gripper(wait=True)
+        # Retract
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0, 0.0, 0.15]), orient_tolerance=0.05)
+        assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=True)
 
-        # Go to pose where container is
-        if not self.robot_mg.go_to_pose_goal(
-            pick_pose,
-            acc_scaling=0.1,
-            velocity_scaling=0.9,
-        ):
-            print("Error moving to pose goal")
-            return
+    def place_container_on_scale(self):
+        init_weight = self.dispenser.get_weight()
+        # Go to designated pose
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0, 0, 0.15]), cartesian_path=False, orient_tolerance=0.05)
+        assert self.robot_mg.go_to_pose_goal(self.CONTAINER_SCALE_POSE, wait=True, orient_tolerance=0.05)
+        # Open gripper
+        self.robot_mg.open_gripper(wait=True)
+        # Retract
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0]), orient_tolerance=0.05)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0.15]), orient_tolerance=0.05)
+        assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=True)
+        
+        self.available_weight = self.dispenser.get_weight() - init_weight - self.EMPTY_CONTAINER_WEIGHT
 
-        # Grip the container
-        self.robot_mg.close_gripper(wait=True)
-
-        # Go to intermediate pose?
-
-        # Place container on weighing scale
-        if not self.robot_mg.go_to_pose_goal(
-            place_pose,
-            acc_scaling=0.1,
-            velocity_scaling=0.9,
-        ):
-            print("Error moving to pose goal")
-            return
-
-    def refill_container(self) -> float:
-        user_input = float(input("Please refill container.\nEnter the weight of the container: "))
-        _ = input("Press Enter to continue...")
-        return float(user_input)
+    def reset_containers(self):
+        self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
+        self.pick_container_from_scale()
+        self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_1)
+        self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
+        self.place_container_on_scale()
+        self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1)
 
     def sample_weight(self) -> float:
-        return np.random.uniform(self.MIN_DISPENSE_WEIGHT, min(self.MAX_DISPENSE_WEIGHT, self.container_wt))
+        return np.random.uniform(self.MIN_DISPENSE_WEIGHT, min(self.MAX_DISPENSE_WEIGHT, self.available_weight))
 
     def interact(self, total_steps: int = None) -> Dict:
         """
@@ -122,21 +127,8 @@ class Environment:
 
         while(current_steps < total_steps):
 
-            if current_steps == 0:
-                # To start with, pick and place empty container on weighing scale
-                self.pick_and_place_container(self.pose1, self.pose_on_scale)
-                # Pick full container for dispensing
-                self.pick_container(self.pose2)
-
-            if(self.container_wt < self.REFILL_THRESHOLD):
-                # Place empty container on shelf
-                self.place_container(self.pose1)
-
-                # TODO: Read container weight?
-                # Replace full container onto shelf
-                self.pick_and_place_container(self.pose_on_scale, self.pose2)
-                # Place empty container on weighing scale
-                self.pick_and_place_container(self.pose1, self.pose_on_scale)
+            if(self.available_weight < self.REFILL_THRESHOLD):
+                self.reset_containers()
 
             # Proceed with dispensing
             target_wt = self.sample_weight()
@@ -145,7 +137,7 @@ class Environment:
                 ingredient_params=self.ingredient_params,
                 target_wt=target_wt
             )
-            self.container_wt -= dispensed_wt
+            self.available_weight -= dispensed_wt
 
             if success:
                 for k, v in rollout_data.items():

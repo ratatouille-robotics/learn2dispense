@@ -11,7 +11,7 @@ if  __name__ == "__main__":
         rospy.init_node("learn_dispense")
         log_dir = pathlib.Path(__file__).parent.parent / "logs"
 
-        env = Environment(log_dir=log_dir)
+        env = Environment(log_dir=log_dir, pick_container_on_start=True)
         env.interact(10000)
 
     except rospy.ROSInterruptException:

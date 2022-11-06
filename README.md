@@ -34,7 +34,7 @@ The following steps have to executed to run ingredient dispensing in isolation:
 2. On the ROS side, start the Universal Robot ROS Driver to interface with the robot
 
     ```
-    roslaunch ur_motion ur5e_bringup.launch robot_ip:=10.0.0.2
+    roslaunch ur_motion ur5e_learning_bringup.launch robot_ip:=10.0.0.2
     ```
 
 3. Start the MoveIt Motion Planning interface
