@@ -25,7 +25,7 @@ class Environment:
     MIN_DISPENSE_WEIGHT = 10
     MAX_DISPENSE_WEIGHT = 100
     REFILL_THRESHOLD = 10
-    EMPTY_CONTAINER_WEIGHT = 117
+    EMPTY_CONTAINER_WEIGHT = 116.5
 
     def __init__(self, log_dir: pathlib.Path, pick_container_on_start: bool = False) -> None:
         self.log_dir = log_dir
@@ -70,7 +70,7 @@ class Environment:
     def place_container_on_shelf(self, place_pose, return_home: bool=False):
         # Go to designated pose
         assert self.robot_mg.go_to_joint_state(self.SHELF_FRONT, cartesian_path=False)
-        assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0.2, 0.015]))
+        assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0.2, 0.015]), cartesian_path=False)
         assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0, 0.015]))
         assert self.robot_mg.go_to_pose_goal(place_pose)
         # Open gripper
@@ -84,28 +84,29 @@ class Environment:
         # Open gripper
         self.robot_mg.open_gripper(wait=True)
         # Go to designated pose
-        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0.0, 0.15]), orient_tolerance=0.05)
-        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0.0, 0]), orient_tolerance=0.05)
-        assert self.robot_mg.go_to_pose_goal(self.CONTAINER_SCALE_POSE, orient_tolerance=0.05)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0.0, 0.15]))
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0.0, 0]))
+        assert self.robot_mg.go_to_pose_goal(self.CONTAINER_SCALE_POSE)
         # Close gripper
         assert self.robot_mg.close_gripper(wait=True)
         # Retract
-        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0, 0.0, 0.15]), orient_tolerance=0.05)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0, 0.0, 0.15]))
         assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=True)
 
     def place_container_on_scale(self):
         init_weight = self.dispenser.get_weight()
         # Go to designated pose
-        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0, 0, 0.15]), cartesian_path=False, orient_tolerance=0.05)
-        assert self.robot_mg.go_to_pose_goal(self.CONTAINER_SCALE_POSE, wait=True, orient_tolerance=0.05)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0, 0, 0.15]), cartesian_path=False)
+        assert self.robot_mg.go_to_pose_goal(self.CONTAINER_SCALE_POSE, wait=True)
         # Open gripper
         self.robot_mg.open_gripper(wait=True)
         # Retract
-        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0]), orient_tolerance=0.05)
-        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0.15]), orient_tolerance=0.05)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0]))
+        assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0.15]))
         assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=True)
         
         self.available_weight = self.dispenser.get_weight() - init_weight - self.EMPTY_CONTAINER_WEIGHT
+        rospy.loginfo(f"Available ingredient quantity: {self.available_weight:0.2f} g")
 
     def reset_containers(self):
         self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
@@ -113,7 +114,7 @@ class Environment:
         self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_1)
         self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
         self.place_container_on_scale()
-        self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1)
+        self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1, return_home=True)
 
     def sample_weight(self) -> float:
         return np.random.uniform(self.MIN_DISPENSE_WEIGHT, min(self.MAX_DISPENSE_WEIGHT, self.available_weight))
@@ -126,18 +127,20 @@ class Environment:
         current_steps = 0
 
         while(current_steps < total_steps):
-
             if(self.available_weight < self.REFILL_THRESHOLD):
+                rospy.loginfo(f"Container is empty. Reset sequence initiated.")
                 self.reset_containers()
+                continue
 
             # Proceed with dispensing
             target_wt = self.sample_weight()
-            rospy.loginfo(f"Requested wt: {target_wt:0.4f}")
+            rospy.loginfo(f"Requested wt: {target_wt:0.4f} g")
             success, dispensed_wt, rollout_data = self.dispenser.dispense_ingredient(
                 ingredient_params=self.ingredient_params,
                 target_wt=target_wt
             )
-            self.available_weight -= dispensed_wt
+            self.available_weight -= max(0, dispensed_wt)
+            rospy.loginfo(f"Available ingredient quantity: {self.available_weight:0.2f} g")
 
             if success:
                 for k, v in rollout_data.items():
