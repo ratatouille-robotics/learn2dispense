@@ -63,6 +63,7 @@ def run(log_results=False):
         start_time = time.time()
         _, dispensed_wt, _ = dispenser.dispense_ingredient(params, float(input_wt))
         dispense_time = time.time() - start_time
+        print(f"Dispensing Time: {dispense_time: 0.2f}s")
 
         if log_results:
             csv_writer.writerow([num_runs, input_wt, np.round(dispensed_wt, 2), np.round(dispense_time, 1)])

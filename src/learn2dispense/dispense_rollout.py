@@ -13,7 +13,9 @@ import dispense.transforms as T
 from dispense.dispense import get_transform, get_rotation
 
 
-T_STEP = 0.005
+T_STEP = 0.1
+CONTROL_STEP = 0.005
+
 MAX_ROT_ACC = np.pi / 4
 MIN_ROT_ACC = -2 * MAX_ROT_ACC
 MAX_ROT_VEL = np.pi / 32
@@ -52,9 +54,10 @@ class Dispenser:
     OBS_HIST_LENGTH = [5, 5, 1, 1, 1, 1]
 
     def __init__(self, robot_mg: RobotMoveGroup) -> None:
+        assert (T_STEP/CONTROL_STEP).is_integer()
         # Setup comm with the weighing scale
         self.wt_subscriber = rospy.Subscriber("/cooking_pot/weighing_scale", Weight, callback=self._weight_callback)
-        self.rate = rospy.Rate(1 / T_STEP)
+        self.rate = rospy.Rate(1 / CONTROL_STEP)
         self.robot_mg = robot_mg
         self._w_data = None
 
@@ -163,6 +166,27 @@ class Dispenser:
 
         return success, dispensed_wt, self.process_rollout_data()
 
+    def run_control_loop(self, velocity):
+        last_velocity = self.last_vel
+        for _ in range(int(T_STEP / CONTROL_STEP)):
+            if velocity > last_velocity:
+                curr_velocity = min(last_velocity + self.max_rot_acc * CONTROL_STEP, velocity)
+            else:
+                curr_velocity = max(last_velocity + self.min_rot_acc * CONTROL_STEP, velocity)
+
+            # Convert the velocity into a twist
+            raw_twist = curr_velocity * self.base_raw_twist
+
+            # Transform the frame of the twist
+            curr_pose = self.robot_mg.get_current_pose()
+            twist_transform = get_transform(curr_pose, self.container_offset)
+            twist = T.TransformTwist(raw_twist, twist_transform)
+            twist = T.numpy2twist(twist)
+
+            self.robot_mg.send_cartesian_vel_trajectory(twist)
+            self.rate.sleep()
+            last_velocity = curr_velocity
+
     def run_pd_control(self, target_wt: float, err_threshold: float):
         """
         Run the PD controller
@@ -172,7 +196,7 @@ class Dispenser:
 
         error = target_wt
         wt_fb_acc = deque(maxlen=int(DERIVATIVE_WINDOW / T_STEP) + 1)
-        base_raw_twist = np.array([0, 0, 0] + self.ctrl_params["rot_axis"], dtype=np.float)
+        self.base_raw_twist = np.array([0, 0, 0] + self.ctrl_params["rot_axis"], dtype=np.float)
         success = True
         start_time = time.time()
         self.steps = 0
@@ -188,8 +212,8 @@ class Dispenser:
                 break
 
             error = target_wt - (curr_wt - self.start_wt)
-            mean_curr_wt = np.mean([wt_fb_acc[i] for i in range(max(len(wt_fb_acc) - 5, 0), len(wt_fb_acc))])
-            mean_prev_wt = np.mean([wt_fb_acc[i] for i in range(0, min(5, len(wt_fb_acc)))])
+            mean_curr_wt = wt_fb_acc[-1]
+            mean_prev_wt = wt_fb_acc[0]
             error_rate = -(mean_curr_wt - mean_prev_wt) / DERIVATIVE_WINDOW
 
             p_term = self.ctrl_params["p_gain"] * error
@@ -207,16 +231,7 @@ class Dispenser:
 
             total_vel = pid_vel
 
-            # Convert the velocity into a twist
-            raw_twist = total_vel * base_raw_twist
-
-            # Transform the frame of the twist
-            curr_pose = self.robot_mg.get_current_pose()
-            twist_transform = get_transform(curr_pose, self.container_offset)
-            twist = T.TransformTwist(raw_twist, twist_transform)
-            twist = T.numpy2twist(twist)
-
-            self.robot_mg.send_cartesian_vel_trajectory(twist)
+            self.run_control_loop(total_vel)
 
             self.rollout_data["time"].append(iter_start_time)
             self.rollout_data["velocity"].append(self.last_vel)
@@ -230,17 +245,15 @@ class Dispenser:
             self.last_vel = total_vel
 
             # Check if the angluar limits about the pouring axis have been reached
+            curr_pose = self.robot_mg.get_current_pose()
             if np.abs(get_rotation(start_T, T.pose2matrix(curr_pose))[0]) >= self.angle_limit:
                 rospy.logerr("Container does not seem to have sufficient ingredient quantity...")
                 success = False
                 break
 
-            self.rate.sleep()
-
         self.min_rot_vel = min(2 * MIN_ROT_VEL, self.min_rot_vel)
         # Retract the container to the starting position
         while True:
-            iter_start_time = time.time() - start_time
             curr_wt = self.get_weight()
 
             curr_pose = self.robot_mg.get_current_pose()
@@ -259,16 +272,8 @@ class Dispenser:
                 vel = self.last_vel + self.min_rot_acc * T_STEP
             vel = np.clip(vel, self.min_rot_vel, self.max_rot_vel)
 
-            # Add the necessary shake twists
-            raw_twist = vel * base_raw_twist
-            twist_transform = get_transform(curr_pose, self.container_offset)
-            twist = T.TransformTwist(raw_twist, twist_transform)
-            twist = T.numpy2twist(twist)
-
-            self.robot_mg.send_cartesian_vel_trajectory(twist)
+            self.run_control_loop(vel)
             self.last_acc = (vel - self.last_vel) / T_STEP
             self.last_vel = vel
-
-            self.rate.sleep()
 
         return success
