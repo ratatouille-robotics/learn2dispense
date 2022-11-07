@@ -4,9 +4,10 @@ import rospy
 import pathlib
 import numpy as np
 
-from typing import Dict
+from typing import Dict, Optional
 from motion.commander import RobotMoveGroup
 from motion.utils import offset_pose, make_pose
+from stable_baselines3.common.policies import BasePolicy
 from learn2dispense.dispense_rollout import Dispenser
 
 
@@ -124,7 +125,7 @@ class Environment:
     def sample_weight(self) -> float:
         return np.random.uniform(self.MIN_DISPENSE_WEIGHT, min(self.MAX_DISPENSE_WEIGHT, self.available_weight))
 
-    def interact(self, total_steps: int = None) -> Dict:
+    def interact(self, total_steps: int = None, policy: Optional[BasePolicy] = None) -> Dict:
         """
         Will dispense for the requested timesteps and returns the requested data
         """
@@ -141,7 +142,7 @@ class Environment:
             target_wt = self.sample_weight()
             rospy.loginfo(f"[{current_steps}/{total_steps}]:\t Requested Wt: {target_wt:0.4f} g")
             success, dispensed_wt, rollout_data = self.dispenser.dispense_ingredient(
-                ingredient_params=self.ingredient_params, target_wt=target_wt
+                ingredient_params=self.ingredient_params, target_wt=target_wt, policy=policy
             )
             self.available_weight -= max(0, dispensed_wt)
             rospy.loginfo(f"Available ingredient quantity: {self.available_weight:0.2f} g")
@@ -157,10 +158,6 @@ class Environment:
 
         for k, v in data.items():
             data[k] = np.concatenate(v, axis=0)
-
-        import pickle
-        with open('data.pkl', 'wb') as f:
-            pickle.dump(data, f)
 
         return data
 

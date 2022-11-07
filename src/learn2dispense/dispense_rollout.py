@@ -2,13 +2,15 @@
 import time
 import rospy
 import numpy as np
-from typing import Tuple, Dict
+import torch as th
+from typing import Tuple, Dict, Optional
 from collections import deque
 
+from stable_baselines3.common.policies import BasePolicy
+from stable_baselines3.common.utils import obs_as_tensor
 from motion.utils import make_pose
 from motion.commander import RobotMoveGroup
 from sensor_interface.msg import Weight
-
 import dispense.transforms as T
 from dispense.dispense import get_transform, get_rotation
 
@@ -20,6 +22,8 @@ MAX_ROT_ACC = np.pi / 4
 MIN_ROT_ACC = -2 * MAX_ROT_ACC
 MAX_ROT_VEL = np.pi / 32
 MIN_ROT_VEL = -2 * MAX_ROT_VEL
+
+LEARNING_MAX_VEL = MAX_ROT_VEL / 2
 
 ANGLE_LIMIT = {
     "regular": {
@@ -56,7 +60,7 @@ class Dispenser:
     OBS_STD = [50, 25, MAX_ROT_VEL, MAX_ROT_ACC, MAX_ROT_VEL]
 
     def __init__(self, robot_mg: RobotMoveGroup) -> None:
-        assert (T_STEP/CONTROL_STEP).is_integer()
+        assert (T_STEP / CONTROL_STEP).is_integer()
         # Setup comm with the weighing scale
         self.wt_subscriber = rospy.Subscriber("/cooking_pot/weighing_scale", Weight, callback=self._weight_callback)
         self.rate = rospy.Rate(1 / CONTROL_STEP)
@@ -79,6 +83,21 @@ class Dispenser:
             (rospy.Time.now() - self._w_data.header.stamp).to_sec() < 0.5,
         )
 
+    def get_last_state(self) -> np.ndarray:
+        last_obs = []
+        for i, obs_item in enumerate(self.OBS_DATA):
+            avail_size = len(self.rollout_data[obs_item])
+            reqd_size = self.OBS_HIST_LENGTH[i]
+            if avail_size >= reqd_size:
+                last_obs.append(self.rollout_data[obs_item][-reqd_size:])
+            else:
+                last_obs.append(self.rollout_data[obs_item][-avail_size:])
+                last_obs.append((reqd_size - avail_size) * [self.rollout_data[obs_item][0],])
+
+        last_obs = np.concatenate(last_obs, axis=-1)
+
+        return last_obs
+
     def reset_rollout(self):
         self.rollout_data = {}
         for k in self.OBS_DATA:
@@ -87,7 +106,10 @@ class Dispenser:
     def process_rollout_data(self) -> Dict:
         outputs = {}
         for k, v in self.rollout_data.items():
-            self.rollout_data[k] = np.array(v, dtype=np.float32)
+            if isinstance(v, th.Tensor):
+                self.rollout_data[k] = th.tensor(v, dtype=th.float32)
+            else:
+                self.rollout_data[k] = np.array(v, dtype=np.float32)
 
         obs = []
         for i, obs_item in enumerate(self.OBS_DATA):
@@ -108,7 +130,12 @@ class Dispenser:
 
         return outputs
 
-    def dispense_ingredient(self, ingredient_params: dict, target_wt: float) -> Tuple[bool, float, Dict]:
+    def dispense_ingredient(
+        self,
+        ingredient_params: dict,
+        target_wt: float,
+        policy: Optional[BasePolicy] = None
+    ) -> Tuple[bool, float, Dict]:
         # Record current robot position
         robot_original_pose = self.robot_mg.get_current_pose()
         # Send dummy velocity to avoid delayed motion start on first run
@@ -144,7 +171,7 @@ class Dispenser:
         # Dispense ingredient
         rospy.loginfo("Dispensing started...")
         self.angle_limit = ANGLE_LIMIT[self.lid_type][ingredient_params["pouring_position"]]
-        self.run_pd_control(target_wt, self.ctrl_params["error_threshold"])
+        self.run_pd_control(target_wt, self.ctrl_params["error_threshold"], policy)
 
         # Move to dispense-start position
         assert self.robot_mg.go_to_pose_goal(
@@ -191,7 +218,7 @@ class Dispenser:
             self.rate.sleep()
             last_velocity = curr_velocity
 
-    def run_pd_control(self, target_wt: float, err_threshold: float):
+    def run_pd_control(self, target_wt: float, err_threshold: float, policy: BasePolicy):
         """
         Run the PD controller
         """
@@ -235,6 +262,15 @@ class Dispenser:
 
             total_vel = pid_vel
 
+            if policy is not None:
+                with th.no_grad():
+                    obs = self.get_last_state()
+                    obs_tensor = obs_as_tensor(obs, policy.device)
+                    action, value, log_prob = policy(obs_tensor)
+                action = action.cpu().numpy()
+
+                total_vel += (LEARNING_MAX_VEL * action)
+
             self.run_control_loop(total_vel)
 
             self.rollout_data["time"].append(iter_start_time)
@@ -243,6 +279,9 @@ class Dispenser:
             self.rollout_data["pid_output"].append(pid_vel)
             self.rollout_data["error"].append(error)
             self.rollout_data["error_rate"].append(error_rate)
+            self.rollout_data["action"].append(action)
+            self.rollout_data["value"].append(value)
+            self.rollout_data["log_prob"].append(log_prob)
             self.steps += 1
 
             self.last_acc = (total_vel - self.last_vel) / T_STEP
