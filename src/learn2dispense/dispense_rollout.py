@@ -20,7 +20,10 @@ MAX_ROT_VEL = np.pi / 32
 MIN_ROT_VEL = -2 * MAX_ROT_VEL
 
 ANGLE_LIMIT = {
-    "regular": {"corner": (1 / 3) * np.pi, "edge": (1 / 2) * np.pi},
+    "regular": {
+        "corner": (1 / 3) * np.pi,
+        "edge": (1 / 2) * np.pi
+    },
     "spout": {"corner": (2 / 5) * np.pi}
 }
 
@@ -35,23 +38,22 @@ CONTAINER_OFFSET = {
 
 POURING_POSES = {
     "regular": {
-        "corner": ([-0.300, -0.030, 0.510], [0.671, -0.613, -0.414, 0.048]),
+        "corner": ([-0.375, -0.020, 0.486], [0.671, -0.613, -0.414, 0.048]),
         "edge": ([-0.425, 0.245, 0.520], [0.910, -0.324, -0.109, 0.235]),
     },
     "spout": {"corner": ([-0.295, -0.03, 0.460], [0.633, -0.645, -0.421, 0.082])},
-    "holes": {"corner": ([-0.360, 0.070, 0.520], [0.749, 0.342, -0.520, -0.228])}
+    "holes": {"corner": ([-0.360, 0.070, 0.520], [0.749, 0.342, -0.520, -0.228])},
 }
 
 
 class Dispenser:
 
-    STATE_DATA = ["error", "error_rate", "velocity", "acceleration", "pid_output", "time"]
+    OBS_DATA = ["error", "error_rate", "velocity", "acceleration", "pid_output", "time"]
+    OBS_HIST_LENGTH = [5, 5, 1, 1, 1, 1]
 
     def __init__(self, robot_mg: RobotMoveGroup) -> None:
         # Setup comm with the weighing scale
-        self.wt_subscriber = rospy.Subscriber(
-            "/cooking_pot/weighing_scale", Weight, callback=self._weight_callback
-        )
+        self.wt_subscriber = rospy.Subscriber("/cooking_pot/weighing_scale", Weight, callback=self._weight_callback)
         self.rate = rospy.Rate(1 / T_STEP)
         self.robot_mg = robot_mg
         self._w_data = None
@@ -74,28 +76,32 @@ class Dispenser:
 
     def reset_rollout(self):
         self.rollout_data = {}
-        for k in self.STATE_DATA:
+        for k in self.OBS_DATA:
             self.rollout_data[k] = []
 
     def process_rollout_data(self) -> Dict:
         outputs = {}
         for k, v in self.rollout_data.items():
-            self.rollout_data[k] = np.array([v], dtype=np.float32)
-        
-        state = [self.rollout_data[k] for k in self.STATE_DATA]
-        state = np.concatenate(state, axis=1)
-        outputs["obs"] = state
+            self.rollout_data[k] = np.array(v, dtype=np.float32)
+
+        obs = []
+        for i, obs_item in enumerate(self.OBS_DATA):
+            data = np.zeros((self.steps, self.OBS_HIST_LENGTH[i]), dtype=np.float32)
+            for t_step in range(self.OBS_HIST_LENGTH[i]):
+                data[t_step:, t_step] = self.rollout_data[obs_item][: self.steps - t_step]
+                if obs_item in ["error"]:
+                    data[:t_step, t_step] = data[0, 0]
+            obs.append(data)
+
+        obs = np.concatenate(obs, axis=1)
+        outputs["obs"] = obs
 
         outputs["episode_start"] = np.zeros(len(outputs["obs"]), dtype=np.float32)
         outputs["episode_start"][0] = 1
 
         return outputs
 
-    def dispense_ingredient(
-        self,
-        ingredient_params: dict,
-        target_wt: float
-    ) -> Tuple[bool, float, Dict]:
+    def dispense_ingredient(self, ingredient_params: dict, target_wt: float) -> Tuple[bool, float, Dict]:
         # Record current robot position
         robot_original_pose = self.robot_mg.get_current_pose()
         # Send dummy velocity to avoid delayed motion start on first run
@@ -118,11 +124,7 @@ class Dispenser:
         pos, orient = POURING_POSES[self.lid_type][ingredient_params["pouring_position"]]
         pre_dispense_pose = make_pose(pos, orient)
         assert self.robot_mg.go_to_pose_goal(
-            pre_dispense_pose,
-            cartesian_path=True,
-            orient_tolerance=0.05,
-            velocity_scaling=0.75,
-            acc_scaling=0.5
+            pre_dispense_pose, cartesian_path=True, orient_tolerance=0.05, velocity_scaling=0.75, acc_scaling=0.5
         )
 
         # set run-specific params
@@ -139,35 +141,24 @@ class Dispenser:
 
         # Move to dispense-start position
         assert self.robot_mg.go_to_pose_goal(
-            pre_dispense_pose,
-            cartesian_path=True,
-            orient_tolerance=0.05,
-            velocity_scaling=0.5,
-            acc_scaling=0.25
+            pre_dispense_pose, cartesian_path=True, orient_tolerance=0.05, velocity_scaling=0.5, acc_scaling=0.25
         )
 
         assert self.robot_mg.go_to_pose_goal(
-            robot_original_pose,
-            cartesian_path=True,
-            orient_tolerance=0.05,
-            velocity_scaling=0.75,
-            acc_scaling=0.5
+            robot_original_pose, cartesian_path=True, orient_tolerance=0.05, velocity_scaling=0.75, acc_scaling=0.5
         )
 
         success = False
         dispensed_wt = self.get_weight() - self.start_wt
         if (target_wt - dispensed_wt) > ingredient_params["tolerance"]:
-            rospy.logerr(
-                f"Dispensed amount is below tolerance...Requested Qty: {target_wt:0.2f}g \t Dispensed Qty: {dispensed_wt:0.2f}g"
-            )
+            rospy.logerr(f"Dispensed amount is below tolerance...")
+            rospy.logerr(f"Dispensed Wt: {dispensed_wt:0.2f}g")
         elif (dispensed_wt - target_wt) > ingredient_params["tolerance"]:
-            rospy.logerr(
-                f"Dispensed amount exceeded the tolerance...\nRequested Qty: {target_wt:0.2f}g \t Dispensed Qty: {dispensed_wt:0.2f}g"
-            )
+            rospy.logerr(f"Dispensed amount exceeded the tolerance...")
+            rospy.logerr(f"Dispensed Wt: {dispensed_wt:0.2f}g")
         else:
-            rospy.loginfo(
-                f"Ingredient dispensed successfuly...\nRequested Qty: {target_wt:0.2f}g \t Dispensed Qty: {dispensed_wt:0.2f}g"
-            )
+            rospy.loginfo(f"Ingredient dispensed successfuly...")
+            rospy.loginfo(f"Dispensed Wt: {dispensed_wt:0.2f} g")
             success = True
 
         return success, dispensed_wt, self.process_rollout_data()
@@ -178,12 +169,13 @@ class Dispenser:
         """
         assert DERIVATIVE_WINDOW >= T_STEP
         start_T = T.pose2matrix(self.robot_mg.get_current_pose())
-    
+
         error = target_wt
         wt_fb_acc = deque(maxlen=int(DERIVATIVE_WINDOW / T_STEP) + 1)
         base_raw_twist = np.array([0, 0, 0] + self.ctrl_params["rot_axis"], dtype=np.float)
         success = True
         start_time = time.time()
+        self.steps = 0
 
         # Run controller as long as error is not within tolerance
         while error > err_threshold:
@@ -191,9 +183,7 @@ class Dispenser:
             curr_wt, is_recent = self.get_weight_fb()
             wt_fb_acc.append(curr_wt)
             if not is_recent:
-                rospy.logerr(
-                    "Weight feedback from weighing scale is too delayed. Stopping dispensing process."
-                )
+                rospy.logerr("Weight feedback from weighing scale is too delayed. Stopping dispensing process.")
                 success = False
                 break
 
@@ -219,7 +209,7 @@ class Dispenser:
 
             # Convert the velocity into a twist
             raw_twist = total_vel * base_raw_twist
-            
+
             # Transform the frame of the twist
             curr_pose = self.robot_mg.get_current_pose()
             twist_transform = get_transform(curr_pose, self.container_offset)
@@ -234,12 +224,13 @@ class Dispenser:
             self.rollout_data["pid_output"].append(pid_vel)
             self.rollout_data["error"].append(error)
             self.rollout_data["error_rate"].append(error_rate)
+            self.steps += 1
 
             self.last_acc = (total_vel - self.last_vel) / T_STEP
             self.last_vel = total_vel
 
             # Check if the angluar limits about the pouring axis have been reached
-            if (np.abs(get_rotation(start_T, T.pose2matrix(curr_pose))[0]) >= self.angle_limit):
+            if np.abs(get_rotation(start_T, T.pose2matrix(curr_pose))[0]) >= self.angle_limit:
                 rospy.logerr("Container does not seem to have sufficient ingredient quantity...")
                 success = False
                 break
@@ -279,7 +270,5 @@ class Dispenser:
             self.last_vel = vel
 
             self.rate.sleep()
-
-        rospy.loginfo("PD control phase completed...")
 
         return success
