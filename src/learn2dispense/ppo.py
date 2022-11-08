@@ -129,9 +129,7 @@ class PPO(BaseAlgorithm):
             ), "`batch_size` must be greater than 1. See https://github.com/DLR-RM/stable-baselines3/issues/440"
 
             # Check that `n_steps > 1` to avoid NaN when doing advantage normalization
-            assert self.n_steps > 1 or (
-                not normalize_advantage
-            ), f"`n_steps * n_envs` must be greater than 1. Currently n_steps={self.n_steps} and n_envs={self.env.num_envs}"
+            assert self.n_steps > 1 or not normalize_advantage
             # Check that the rollout buffer size is a multiple of the mini-batch size
             untruncated_batches = self.n_steps // batch_size
             if self.n_steps % batch_size > 0:
@@ -140,8 +138,6 @@ class PPO(BaseAlgorithm):
                     f" but because the `RolloutBuffer` is of size `n_steps = {self.n_steps}`,"
                     f" after every {untruncated_batches} untruncated mini-batches,"
                     f" there will be a truncated mini-batch of size {self.n_steps % batch_size}\n"
-                    f"We recommend using a `batch_size` that is a factor of `n_steps * n_envs`.\n"
-                    f"Info: (n_steps={self.n_steps} and n_envs={self.env.num_envs})"
                 )
 
         self.batch_size = batch_size
@@ -167,7 +163,6 @@ class PPO(BaseAlgorithm):
             device=self.device,
             gamma=self.gamma,
             gae_lambda=self.gae_lambda,
-            n_envs=self.n_envs,
         )
         self.policy = self.policy_class(  # pytype:disable=not-instantiable
             self.observation_space,

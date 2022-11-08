@@ -50,8 +50,10 @@ POURING_POSES = {
 
 class Dispenser:
 
-    OBS_DATA = ["error", "error_rate", "velocity", "acceleration", "pid_output", "time"]
-    OBS_HIST_LENGTH = [5, 5, 1, 1, 1, 1]
+    OBS_DATA = ["error", "error_rate", "velocity", "acceleration", "pid_output"]
+    OBS_HIST_LENGTH = [5, 5, 1, 1, 1]
+    OBS_MEAN = [50, -25, 0, 0, 0]
+    OBS_STD = [50, 25, MAX_ROT_VEL, MAX_ROT_ACC, MAX_ROT_VEL]
 
     def __init__(self, robot_mg: RobotMoveGroup) -> None:
         assert (T_STEP/CONTROL_STEP).is_integer()
@@ -94,6 +96,7 @@ class Dispenser:
                 data[t_step:, t_step] = self.rollout_data[obs_item][: self.steps - t_step]
                 if obs_item in ["error"]:
                     data[:t_step, t_step] = data[0, 0]
+            data = (data - self.OBS_MEAN[i]) / self.OBS_STD[i]
             obs.append(data)
 
         obs = np.concatenate(obs, axis=1)
@@ -101,6 +104,7 @@ class Dispenser:
 
         outputs["episode_start"] = np.zeros(len(outputs["obs"]), dtype=np.float32)
         outputs["episode_start"][0] = 1
+        outputs["time"] = self.rollout_data["time"]
 
         return outputs
 
