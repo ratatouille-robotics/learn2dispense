@@ -6,15 +6,8 @@ import numpy as np
 
 from typing import Dict
 from motion.commander import RobotMoveGroup
-from motion.utils import offset_pose, offset_joint, make_pose
+from motion.utils import offset_pose, make_pose
 from learn2dispense.dispense_rollout import Dispenser
-
-
-HOME = [-0.5992, -2.4339, 2.2566, -2.9490, -1.0004, 3.0982]
-SHELF_FRONT = [-0.05481, -2.0645, 2.480, -3.2914, 0.0045, 2.8663]
-CONTAINER_SHELF_POSE_1 = [-0.144, -0.472, 0.477, 0.729, -0.004, -0.008, 0.685]
-CONTAINER_SHELF_POSE_2 = [-0.291, -0.472, 0.477, 0.729, -0.004, -0.008, 0.685]
-CONTAINER_SCALE_POSE = [-0.436, 0.029, 0.214, -0.498, 0.521, 0.498, -0.482]
 
 
 class Environment:
@@ -22,6 +15,12 @@ class Environment:
     Class to maintain an internal state of the cell and continuously run with running into errors.
     Generates data samples for learning by interacting with the environment.
     """
+    HOME = [-0.5992, -2.4339, 2.2566, -2.9490, -1.0004, 3.0982]
+    SHELF_FRONT = [-0.05481, -2.0645, 2.480, -3.2914, 0.0045, 2.8663]
+    CONTAINER_SHELF_POSE_1 = [-0.144, -0.472, 0.477, 0.729, -0.004, -0.008, 0.685]
+    CONTAINER_SHELF_POSE_2 = [-0.291, -0.472, 0.477, 0.729, -0.004, -0.008, 0.685]
+    CONTAINER_SCALE_POSE = [-0.436, 0.029, 0.214, -0.498, 0.521, 0.498, -0.482]
+
     MIN_DISPENSE_WEIGHT = 10
     MAX_DISPENSE_WEIGHT = 100
     REFILL_THRESHOLD = 10
@@ -36,15 +35,15 @@ class Environment:
         assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=False)
 
         if pick_container_on_start:
-            self.pick_container_from_shelf(CONTAINER_SHELF_POSE_1, return_home=True)
+            self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1, return_home=True)
             self.place_container_on_scale()
             self.pick_container_from_scale()
-            self.place_container_on_shelf(CONTAINER_SHELF_POSE_1)
+            self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_1)
             # To start with, pick and place empty container on weighing scale
-            self.pick_container_from_shelf(CONTAINER_SHELF_POSE_2, return_home=True)
+            self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
             self.place_container_on_scale()
             # Pick full container for dispensing
-            self.pick_container_from_shelf(CONTAINER_SHELF_POSE_1, return_home=True)
+            self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1, return_home=True)
 
         # Load ingredient-specific params
         config_dir = pathlib.Path(__file__).parent.parent.parent
@@ -53,14 +52,14 @@ class Environment:
 
     def _pre_process(self):
         self.CONTAINER_SCALE_POSE = make_pose(self.CONTAINER_SCALE_POSE[:3], self.CONTAINER_SCALE_POSE[3:])
-        CONTAINER_SHELF_POSE_1 = make_pose(CONTAINER_SHELF_POSE_1[:3], CONTAINER_SHELF_POSE_1[3:])
-        CONTAINER_SHELF_POSE_2 = make_pose(CONTAINER_SHELF_POSE_2[:3], CONTAINER_SHELF_POSE_2[3:])
+        self.CONTAINER_SHELF_POSE_1 = make_pose(self.CONTAINER_SHELF_POSE_1[:3], self.CONTAINER_SHELF_POSE_1[3:])
+        self.CONTAINER_SHELF_POSE_2 = make_pose(self.CONTAINER_SHELF_POSE_2[:3], self.CONTAINER_SHELF_POSE_2[3:])
 
     def pick_container_from_shelf(self, pick_pose, return_home: bool = False):
         # Open gripper
         self.robot_mg.open_gripper(wait=True)
         # Go to designated pose
-        assert self.robot_mg.go_to_joint_state(SHELF_FRONT, cartesian_path=False)
+        assert self.robot_mg.go_to_joint_state(self.SHELF_FRONT, cartesian_path=False)
         assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.2, 0.0]), cartesian_path=False)
         assert self.robot_mg.go_to_pose_goal(pick_pose, wait=True)
         # Close gripper
@@ -73,7 +72,7 @@ class Environment:
 
     def place_container_on_shelf(self, place_pose, return_home: bool = False):
         # Go to designated pose
-        assert self.robot_mg.go_to_joint_state(SHELF_FRONT, cartesian_path=False)
+        assert self.robot_mg.go_to_joint_state(self.SHELF_FRONT, cartesian_path=False)
         assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0.2, 0.015]), cartesian_path=False)
         assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0, 0.015]))
         assert self.robot_mg.go_to_pose_goal(place_pose)
@@ -115,12 +114,12 @@ class Environment:
         assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=True)
 
     def reset_containers(self):
-        self.place_container_on_shelf(CONTAINER_SHELF_POSE_2, return_home=True)
+        self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
         self.pick_container_from_scale()
-        self.place_container_on_shelf(CONTAINER_SHELF_POSE_1)
-        self.pick_container_from_shelf(CONTAINER_SHELF_POSE_2, return_home=True)
+        self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_1)
+        self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
         self.place_container_on_scale()
-        self.pick_container_from_shelf(CONTAINER_SHELF_POSE_1, return_home=True)
+        self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1, return_home=True)
 
     def sample_weight(self) -> float:
         return np.random.uniform(self.MIN_DISPENSE_WEIGHT, min(self.MAX_DISPENSE_WEIGHT, self.available_weight))
