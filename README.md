@@ -63,3 +63,8 @@ receive commands from the control PC.
     ```
     rosrun dispense test_dispense.py
     ```
+
+## Things to figure
+- How to set gamma
+- Clip high observations
+- Clipping actions due to kinematic constraints

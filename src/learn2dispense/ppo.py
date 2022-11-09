@@ -181,6 +181,21 @@ class PPO(BaseAlgorithm):
 
             self.clip_range_vf = get_schedule_fn(self.clip_range_vf)
 
+    def _update_info_buffer(self, infos: List[Dict[str, Any]]) -> None:
+        """
+        Retrieve reward, episode length, episode success and update the buffer
+        if using Monitor wrapper or a GoalEnv.
+
+        :param infos: List of additional information about the transition
+        """
+        for info in infos:
+            maybe_ep_info = info.get("episode")
+            maybe_is_success = info.get("is_success")
+            if maybe_ep_info is not None:
+                self.ep_info_buffer.append(maybe_ep_info)
+            if maybe_is_success is not None:
+                self.ep_success_buffer.append(maybe_is_success)
+
     def collect_rollouts(
         self,
         callback: BaseCallback,
@@ -191,7 +206,9 @@ class PPO(BaseAlgorithm):
         self.policy.set_training_mode(False)
         rollout_buffer.reset()
 
-        rollout_data = self.env.interact(n_rollout_steps, self.policy)
+        rollout_data, infos = self.env.interact(n_rollout_steps, self.policy)
+
+        self._update_info_buffer(infos)
 
         for i in range(len(rollout_data)):
             rollout_buffer.add(
@@ -202,6 +219,11 @@ class PPO(BaseAlgorithm):
                 value=rollout_data["value"][i],
                 log_prob=rollout_data["log_prob"][i],
             )
+
+        rollout_buffer.compute_returns_and_advantage(
+            last_values=np.zeros(1, dtype=th.float32),
+            dones=np.ones(1, dtype=th.float32)
+        )
 
     def train(self) -> None:
         """
@@ -228,6 +250,8 @@ class PPO(BaseAlgorithm):
             approx_kl_divs = []
             # Do a complete pass on the rollout buffer
             for rollout_data in self.rollout_buffer.get(self.batch_size):
+                if len(rollout_data.actions) != self.batch_size:
+                    continue
                 actions = rollout_data.actions
                 if isinstance(self.action_space, spaces.Discrete):
                     # Convert discrete action from float to long

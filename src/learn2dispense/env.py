@@ -4,7 +4,7 @@ import rospy
 import pathlib
 import numpy as np
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 from motion.commander import RobotMoveGroup
 from motion.utils import offset_pose, make_pose
 from stable_baselines3.common.policies import BasePolicy
@@ -125,11 +125,12 @@ class Environment:
     def sample_weight(self) -> float:
         return np.random.uniform(self.MIN_DISPENSE_WEIGHT, min(self.MAX_DISPENSE_WEIGHT, self.available_weight))
 
-    def interact(self, total_steps: int = None, policy: Optional[BasePolicy] = None) -> Dict:
+    def interact(self, total_steps: int = None, policy: Optional[BasePolicy] = None) -> Tuple[Dict, List]:
         """
         Will dispense for the requested timesteps and returns the requested data
         """
         data = {}
+        infos = []
         current_steps = 0
 
         while current_steps < total_steps:
@@ -141,14 +142,15 @@ class Environment:
             # Proceed with dispensing
             target_wt = self.sample_weight()
             rospy.loginfo(f"[{current_steps}/{total_steps}]:\t Requested Wt: {target_wt:0.4f} g")
-            success, dispensed_wt, rollout_data = self.dispenser.dispense_ingredient(
+            completed, dispensed_wt, rollout_data, info = self.dispenser.dispense_ingredient(
                 ingredient_params=self.ingredient_params, target_wt=target_wt, policy=policy
             )
             self.available_weight -= max(0, dispensed_wt)
             rospy.loginfo(f"Available ingredient quantity: {self.available_weight:0.2f} g")
 
-            if success:
+            if completed:
                 current_steps += len(rollout_data["obs"])
+                infos.append(info)
 
                 for k, v in rollout_data.items():
                     if k in data:
@@ -159,7 +161,7 @@ class Environment:
         for k, v in data.items():
             data[k] = np.concatenate(v, axis=0)
 
-        return data
+        return data, infos
 
     @property
     def observation_space(self) -> gym.spaces.Space:
@@ -169,6 +171,6 @@ class Environment:
 
     @property
     def action_space(self) -> gym.spaces.Space:
-        action_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32)
+        action_space = gym.spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
 
         return action_space

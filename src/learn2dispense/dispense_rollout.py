@@ -103,7 +103,7 @@ class Dispenser:
         for k in self.OBS_DATA:
             self.rollout_data[k] = []
 
-    def process_rollout_data(self) -> Dict:
+    def process_rollout_data(self) -> Tuple[Dict, Dict]:
         outputs = {}
         for k, v in self.rollout_data.items():
             if isinstance(v, th.Tensor):
@@ -127,15 +127,22 @@ class Dispenser:
         outputs["episode_start"] = np.zeros(len(outputs["obs"]), dtype=np.float32)
         outputs["episode_start"][0] = 1
         outputs["time"] = self.rollout_data["time"]
+        info = {
+            "episode": {
+                "r": 0,
+                "l": self.steps
+            },
+            "is_success": self.success
+        }
 
-        return outputs
+        return outputs, info
 
     def dispense_ingredient(
         self,
         ingredient_params: dict,
         target_wt: float,
         policy: Optional[BasePolicy] = None
-    ) -> Tuple[bool, float, Dict]:
+    ) -> Tuple[bool, float, Dict, Dict]:
         # Record current robot position
         robot_original_pose = self.robot_mg.get_current_pose()
         # Send dummy velocity to avoid delayed motion start on first run
@@ -182,7 +189,7 @@ class Dispenser:
             robot_original_pose, cartesian_path=True, orient_tolerance=0.05, velocity_scaling=0.75, acc_scaling=0.5
         )
 
-        success = False
+        self.success = False
         dispensed_wt = self.get_weight() - self.start_wt
         if (target_wt - dispensed_wt) > ingredient_params["tolerance"]:
             rospy.logerr(f"Dispensed amount is below tolerance...")
@@ -193,9 +200,11 @@ class Dispenser:
         else:
             rospy.loginfo(f"Ingredient dispensed successfuly...")
             rospy.loginfo(f"Dispensed Wt: {dispensed_wt:0.2f} g")
-            success = True
+            self.success = True
 
-        return success, dispensed_wt, self.process_rollout_data()
+        rollout_data, info = self.process_rollout_data()
+
+        return True, dispensed_wt, rollout_data, info
 
     def run_control_loop(self, velocity):
         last_velocity = self.last_vel
