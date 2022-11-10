@@ -59,6 +59,9 @@ class Dispenser:
     OBS_MEAN = [50, -25, 0, 0, 0]
     OBS_STD = [50, 25, MAX_ROT_VEL, MAX_ROT_ACC, MAX_ROT_VEL]
 
+    REWARD_MEAN = -2
+    REWARD_STD = 20
+
     def __init__(self, robot_mg: RobotMoveGroup) -> None:
         assert (T_STEP / CONTROL_STEP).is_integer()
         # Setup comm with the weighing scale
@@ -103,10 +106,25 @@ class Dispenser:
         for k in self.OBS_DATA:
             self.rollout_data[k] = []
 
+        self.rollout_data["time"] = []
+        self.rollout_data["action"] = []
+        self.rollout_data["action_max_clip"] = []
+        self.rollout_data["action_min_clip"] = []
+        self.rollout_data["value"] = []
+        self.rollout_data["log_prob"] = []
+
+    def compute_rewards(self) -> np.ndarray:
+        rewards = -1 * np.ones(len(self.rollout_data["error"]), dtype=np.float32)
+        if self.success:
+            rewards[-1] = -500
+        rewards = (rewards - self.REWARD_MEAN) / self.REWARD_STD
+
+        return rewards
+
     def process_rollout_data(self) -> Tuple[Dict, Dict]:
         outputs = {}
         for k, v in self.rollout_data.items():
-            if isinstance(v, th.Tensor):
+            if isinstance(v[0], th.Tensor):
                 self.rollout_data[k] = th.tensor(v, dtype=th.float32)
             else:
                 self.rollout_data[k] = np.array(v, dtype=np.float32)
@@ -124,13 +142,22 @@ class Dispenser:
         obs = np.concatenate(obs, axis=1)
         outputs["obs"] = obs
 
+        outputs["reward"] = self.compute_rewards()
         outputs["episode_start"] = np.zeros(len(outputs["obs"]), dtype=np.float32)
         outputs["episode_start"][0] = 1
         outputs["time"] = self.rollout_data["time"]
+        outputs["action"] = self.rollout_data["action"]
+        outputs["value"] = self.rollout_data["value"]
+        outputs["log_prob"] = self.rollout_data["log_prob"]
         info = {
             "episode": {
-                "r": 0,
-                "l": self.steps
+                "r": np.mean(outputs["reward"]),
+                "l": self.steps,
+                "return": np.mean(outputs["reward"]),
+                "dispense_time": self.dispense_time,
+                "action": np.mean(outputs["action"]),
+                "action_max_clip": np.mean(self.rollout_data["action_max_clip"]),
+                "action_min_clip": np.mean(self.rollout_data["action_min_clip"])
             },
             "is_success": self.success
         }
@@ -178,7 +205,9 @@ class Dispenser:
         # Dispense ingredient
         rospy.loginfo("Dispensing started...")
         self.angle_limit = ANGLE_LIMIT[self.lid_type][ingredient_params["pouring_position"]]
+        start_time = time.time()
         self.run_pd_control(target_wt, self.ctrl_params["error_threshold"], policy)
+        self.dispense_time = time.time() - start_time
 
         # Move to dispense-start position
         assert self.robot_mg.go_to_pose_goal(
@@ -194,6 +223,7 @@ class Dispenser:
         if (target_wt - dispensed_wt) > ingredient_params["tolerance"]:
             rospy.logerr(f"Dispensed amount is below tolerance...")
             rospy.logerr(f"Dispensed Wt: {dispensed_wt:0.2f}g")
+            return False, dispensed_wt, None, None
         elif (dispensed_wt - target_wt) > ingredient_params["tolerance"]:
             rospy.logerr(f"Dispensed amount exceeded the tolerance...")
             rospy.logerr(f"Dispensed Wt: {dispensed_wt:0.2f}g")
@@ -262,25 +292,13 @@ class Dispenser:
             pid_vel = p_term + d_term
 
             # Clamp velocity based on acceleration and velocity limits
-            delta_vel = pid_vel - self.last_vel
-            if np.sign(delta_vel) == 1 and delta_vel / T_STEP > self.max_rot_acc:
-                pid_vel = self.last_vel + self.max_rot_acc * T_STEP
-            elif np.sign(delta_vel) == -1 and delta_vel / T_STEP < self.min_rot_acc:
-                pid_vel = self.last_vel + self.min_rot_acc * T_STEP
+            max_vel = self.last_vel + MAX_ROT_ACC * T_STEP
+            min_vel = self.last_vel + MIN_ROT_ACC * T_STEP
+
+            pid_vel = max(min(pid_vel, max_vel), min_vel)
             pid_vel = np.clip(pid_vel, self.min_rot_vel, self.max_rot_vel)
 
             total_vel = pid_vel
-
-            if policy is not None:
-                with th.no_grad():
-                    obs = self.get_last_state()
-                    obs_tensor = obs_as_tensor(obs, policy.device)
-                    action, value, log_prob = policy(obs_tensor)
-                action = action.cpu().numpy()
-
-                total_vel += (LEARNING_MAX_VEL * action)
-
-            self.run_control_loop(total_vel)
 
             self.rollout_data["time"].append(iter_start_time)
             self.rollout_data["velocity"].append(self.last_vel)
@@ -288,9 +306,23 @@ class Dispenser:
             self.rollout_data["pid_output"].append(pid_vel)
             self.rollout_data["error"].append(error)
             self.rollout_data["error_rate"].append(error_rate)
+
+            if policy is not None:
+                with th.no_grad():
+                    obs = self.get_last_state()
+                    obs_tensor = obs_as_tensor(obs, policy.device).view(1, -1)
+                    action, value, log_prob = policy(obs_tensor)
+                action = action.cpu().item()
+
+                total_vel += (LEARNING_MAX_VEL * action)
+
+            self.run_control_loop(total_vel)
+
+            self.rollout_data["action_max_clip"].append(max(total_vel - max_vel, 0))
+            self.rollout_data["action_min_clip"].append(max(min_vel - total_vel, 0))
             self.rollout_data["action"].append(action)
-            self.rollout_data["value"].append(value)
-            self.rollout_data["log_prob"].append(log_prob)
+            self.rollout_data["value"].append(value.squeeze())
+            self.rollout_data["log_prob"].append(log_prob.squeeze())
             self.steps += 1
 
             self.last_acc = (total_vel - self.last_vel) / T_STEP

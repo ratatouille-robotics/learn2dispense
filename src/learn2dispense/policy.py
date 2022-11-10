@@ -67,7 +67,8 @@ class SquashedGaussianDistribution(Distribution):
         return sum_independent_dims(log_prob)
 
     def entropy(self) -> th.Tensor:
-        return sum_independent_dims(self.distribution.entropy())
+        # TODO: Wrong entropy calculation
+        return sum_independent_dims(self.distribution.base_dist.entropy())
 
     def sample(self) -> th.Tensor:
         # Reparametrization trick to pass gradients
@@ -160,3 +161,13 @@ class SimplePolicy(ActorCriticPolicy):
 
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
+
+    def _get_action_dist_from_latent(self, latent_pi: th.Tensor) -> Distribution:
+        """
+        Retrieve action distribution given the latent codes.
+
+        :param latent_pi: Latent code for the actor
+        :return: Action distribution
+        """
+        mean_actions = self.action_net(latent_pi)
+        return self.action_dist.proba_distribution(mean_actions, self.log_std)

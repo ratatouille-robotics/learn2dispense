@@ -1,7 +1,10 @@
+import os
 import gym
 import yaml
 import rospy
+import pickle
 import pathlib
+import torch
 import numpy as np
 
 from typing import Dict, List, Optional, Tuple
@@ -27,19 +30,29 @@ class Environment:
     REFILL_THRESHOLD = 10
     EMPTY_CONTAINER_WEIGHT = 116.5
 
-    def __init__(self, log_dir: pathlib.Path, pick_container_on_start: bool = True) -> None:
+    def __init__(self, log_dir: pathlib.Path, pick_container_on_start: bool = True, log_rollout: bool = False, available_weight: Optional[float] = None) -> None:
         self.log_dir = log_dir
+        self.log_rollout = log_rollout
         self.robot_mg = RobotMoveGroup()
         self.dispenser = Dispenser(self.robot_mg)
         self._pre_process()
+        self.num_episodes = 0
+        self.num_batches = 0
+
+        if self.log_rollout:
+            if not os.path.exists(log_dir / "rollout_data"):
+                os.makedirs(log_dir / "rollout_data")
 
         assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=False)
 
         if pick_container_on_start:
-            self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1, return_home=True)
-            self.place_container_on_scale()
-            self.pick_container_from_scale()
-            self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_1)
+            if available_weight is None:
+                self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1, return_home=True)
+                self.place_container_on_scale()
+                self.pick_container_from_scale()
+                self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_1)
+            else:
+                self.available_weight = available_weight
             # To start with, pick and place empty container on weighing scale
             self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
             self.place_container_on_scale()
@@ -132,6 +145,7 @@ class Environment:
         data = {}
         infos = []
         current_steps = 0
+        self.num_batches += 1
 
         while current_steps < total_steps:
             if self.available_weight < self.REFILL_THRESHOLD:
@@ -149,6 +163,7 @@ class Environment:
             rospy.loginfo(f"Available ingredient quantity: {self.available_weight:0.2f} g")
 
             if completed:
+                self.num_episodes += 1
                 current_steps += len(rollout_data["obs"])
                 infos.append(info)
 
@@ -159,7 +174,18 @@ class Environment:
                         data[k] = [v]
 
         for k, v in data.items():
-            data[k] = np.concatenate(v, axis=0)
+            if (isinstance(v[0], np.ndarray)):
+                data[k] = np.concatenate(v, axis=0)
+            else:
+                data[k] = torch.cat(v, dim=0)
+
+        if self.log_rollout:
+            data_copy = {}
+            for k, v in data.items():
+                data_copy[k] = v.cpu().numpy() if isinstance(v, torch.Tensor) else v
+            
+            with open(self.log_dir / "rollout_data" / f"batch_{self.num_batches}", "wb") as f:
+                pickle.dump(data_copy, f)
 
         return data, infos
 

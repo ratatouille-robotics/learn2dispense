@@ -1,7 +1,9 @@
 import sys
-import gym
+import io
 import time
+import pathlib
 import warnings
+from collections import deque
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 import numpy as np
@@ -9,12 +11,19 @@ import torch as th
 from gym import spaces
 from torch.nn import functional as F
 
-from stable_baselines3.common.base_class import BaseAlgorithm
-from stable_baselines3.common.buffers import DictRolloutBuffer, RolloutBuffer
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.policies import ActorCriticPolicy
-from stable_baselines3.common.type_aliases import MaybeCallback, Schedule
-from stable_baselines3.common.utils import explained_variance, get_schedule_fn, safe_mean
+from stable_baselines3.common.buffers import RolloutBuffer
+from stable_baselines3.common.type_aliases import Schedule
+from stable_baselines3.common.save_util import load_from_zip_file, recursive_setattr
+from stable_baselines3.common.utils import (
+    explained_variance,
+    get_schedule_fn,
+    safe_mean,
+    configure_logger,
+    get_system_info
+)
 
 from learn2dispense.env import Environment
 
@@ -86,7 +95,8 @@ class PPO(BaseAlgorithm):
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
         target_kl: Optional[float] = None,
-        tensorboard_log: Optional[str] = None,
+        log_dir: Optional[str] = None,
+        checkpoint_freq: int = 5000,
         policy_kwargs: Optional[Dict[str, Any]] = None,
         verbose: int = 0,
         seed: Optional[int] = None,
@@ -98,12 +108,11 @@ class PPO(BaseAlgorithm):
             policy,
             env=None,
             learning_rate=learning_rate,
-            tensorboard_log=tensorboard_log,
+            tensorboard_log=log_dir / "tb_data",
             policy_kwargs=policy_kwargs,
             verbose=verbose,
             device=device,
             seed=seed,
-            _init_setup_model=False,
             supported_action_spaces=(
                 spaces.Box,
                 spaces.Discrete,
@@ -120,6 +129,10 @@ class PPO(BaseAlgorithm):
         self.max_grad_norm = max_grad_norm
         self.rollout_buffer = None
         self.env = env
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+        self.checkpoint_freq = checkpoint_freq
+        self.log_dir = log_dir
 
         # Sanity check, otherwise it will lead to noisy gradient and NaN
         # because of the advantage normalization
@@ -152,23 +165,12 @@ class PPO(BaseAlgorithm):
 
     def _setup_model(self) -> None:
         self._setup_lr_schedule()
-        self.set_random_seed(self.seed)
+        self.set_random_seed(self.seed) 
 
-        buffer_cls = DictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else RolloutBuffer
-
-        self.rollout_buffer = buffer_cls(
-            self.n_steps,
-            self.observation_space,
-            self.action_space,
-            device=self.device,
-            gamma=self.gamma,
-            gae_lambda=self.gae_lambda,
-        )
         self.policy = self.policy_class(  # pytype:disable=not-instantiable
             self.observation_space,
             self.action_space,
             self.lr_schedule,
-            use_sde=self.use_sde,
             **self.policy_kwargs  # pytype:disable=not-instantiable
         )
         self.policy = self.policy.to(self.device)
@@ -198,19 +200,26 @@ class PPO(BaseAlgorithm):
 
     def collect_rollouts(
         self,
-        callback: BaseCallback,
-        rollout_buffer: RolloutBuffer,
         n_rollout_steps: int,
     ) -> bool:
         
         self.policy.set_training_mode(False)
-        rollout_buffer.reset()
 
         rollout_data, infos = self.env.interact(n_rollout_steps, self.policy)
-
+        self.num_timesteps += len(rollout_data["obs"])
+        self.num_episodes += np.sum(rollout_data["episode_start"])
         self._update_info_buffer(infos)
 
-        for i in range(len(rollout_data)):
+        rollout_buffer = RolloutBuffer(
+            len(rollout_data["obs"]),
+            self.observation_space,
+            self.action_space,
+            device=self.device,
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+        )
+
+        for i in range(len(rollout_data["obs"])):
             rollout_buffer.add(
                 obs=rollout_data["obs"][i],
                 action=rollout_data["action"][i],
@@ -221,9 +230,11 @@ class PPO(BaseAlgorithm):
             )
 
         rollout_buffer.compute_returns_and_advantage(
-            last_values=np.zeros(1, dtype=th.float32),
-            dones=np.ones(1, dtype=th.float32)
+            last_values=th.zeros(1, dtype=th.float32),
+            dones=np.ones(1, dtype=np.float32)
         )
+
+        return rollout_buffer
 
     def train(self) -> None:
         """
@@ -346,57 +357,199 @@ class PPO(BaseAlgorithm):
         if self.clip_range_vf is not None:
             self.logger.record("train/clip_range_vf", clip_range_vf)
 
+    def _setup_learn(
+        self,
+        total_timesteps: int,
+        reset_num_timesteps: bool = True,
+        tb_log_name: str = "run",
+        progress_bar: bool = False,
+    ) -> Tuple[int, BaseCallback]:
+        """
+        Initialize different variables needed for training.
+
+        :param total_timesteps: The total number of samples (env steps) to train on
+        :param eval_env: Environment to use for evaluation.
+            Caution, this parameter is deprecated and will be removed in the future.
+            Please use `EvalCallback` or a custom Callback instead.
+        :param callback: Callback(s) called at every step with state of the algorithm.
+        :param eval_freq: How many steps between evaluations
+            Caution, this parameter is deprecated and will be removed in the future.
+            Please use `EvalCallback` or a custom Callback instead.
+        :param n_eval_episodes: How many episodes to play per evaluation
+        :param log_path: Path to a folder where the evaluations will be saved
+        :param reset_num_timesteps: Whether to reset or not the ``num_timesteps`` attribute
+        :param tb_log_name: the name of the run for tensorboard log
+        :param progress_bar: Display a progress bar using tqdm and rich.
+        :return: Total timesteps and callback(s)
+        """
+
+        self.start_time = time.time_ns()
+
+        if self.ep_info_buffer is None or reset_num_timesteps:
+            # Initialize buffers if they don't exist, or reinitialize if resetting counters
+            self.ep_info_buffer = deque(maxlen=20)
+            self.ep_success_buffer = deque(maxlen=20)
+
+        if self.action_noise is not None:
+            self.action_noise.reset()
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+            self.num_episodes = 0
+        else:
+            # Make sure training timesteps are ahead of the internal counter
+            total_timesteps += self.num_timesteps
+        self._total_timesteps = total_timesteps
+        self._num_timesteps_at_start = self.num_timesteps
+
+        # Configure logger's outputs if no logger was passed
+        if not self._custom_logger:
+            self._logger = configure_logger(self.verbose, self.tensorboard_log, tb_log_name, reset_num_timesteps)
+
+        return total_timesteps
+
     def learn(
         self: PPOSelf,
         total_timesteps: int,
-        callback: MaybeCallback = None,
-        log_interval: int = 1,
         tb_log_name: str = "OnPolicyAlgorithm",
         reset_num_timesteps: bool = True,
         progress_bar: bool = False,
     ) -> PPOSelf:
 
         iteration = 0
+        checkpoints = 0
 
-        total_timesteps, callback = self._setup_learn(
+        total_timesteps = self._setup_learn(
             total_timesteps,
-            callback,
             reset_num_timesteps,
             tb_log_name,
             progress_bar,
         )
 
-        callback.on_training_start(locals(), globals())
-
         while self.num_timesteps < total_timesteps:
 
-            continue_training = self.collect_rollouts(self.env, callback, self.rollout_buffer, n_rollout_steps=self.n_steps)
-
-            if continue_training is False:
-                break
+            self.rollout_buffer = self.collect_rollouts(n_rollout_steps=self.n_steps)
 
             iteration += 1
             self._update_current_progress_remaining(self.num_timesteps, total_timesteps)
 
-            # Display training infos
-            if log_interval is not None and iteration % log_interval == 0:
-                time_elapsed = max((time.time_ns() - self.start_time) / 1e9, sys.float_info.epsilon)
-                fps = int((self.num_timesteps - self._num_timesteps_at_start) / time_elapsed)
-                self.logger.record("time/iterations", iteration, exclude="tensorboard")
-                if len(self.ep_info_buffer) > 0 and len(self.ep_info_buffer[0]) > 0:
-                    self.logger.record("rollout/ep_rew_mean", safe_mean([ep_info["r"] for ep_info in self.ep_info_buffer]))
-                    self.logger.record("rollout/ep_len_mean", safe_mean([ep_info["l"] for ep_info in self.ep_info_buffer]))
-                self.logger.record("time/fps", fps)
-                self.logger.record("time/time_elapsed", int(time_elapsed), exclude="tensorboard")
-                self.logger.record("time/total_timesteps", self.num_timesteps, exclude="tensorboard")
-                self.logger.dump(step=self.num_timesteps)
-
             self.train()
 
-        callback.on_training_end()
+            # Display training infos
+            time_elapsed = max((time.time_ns() - self.start_time) / 1e9, sys.float_info.epsilon)
+            fps = int((self.num_timesteps - self._num_timesteps_at_start) / time_elapsed)
+            self.logger.record("time/iterations", iteration)
+            if len(self.ep_info_buffer) > 0 and len(self.ep_info_buffer[0]) > 0:
+                self.logger.record("rollout/ep_rew_mean", safe_mean([ep_info["r"] for ep_info in self.ep_info_buffer]))
+                self.logger.record("rollout/ep_len_mean", safe_mean([ep_info["l"] for ep_info in self.ep_info_buffer]))
+                self.logger.record("rollout/ep_return_mean", safe_mean([ep_info["return"] for ep_info in self.ep_info_buffer]))
+                self.logger.record("rollout/ep_time_mean", safe_mean([ep_info["dispense_time"] for ep_info in self.ep_info_buffer]))
+                self.logger.record("rollout/ep_success_ratio", safe_mean(self.ep_success_buffer))
+                self.logger.record("rollout/ep_action_mean", safe_mean([ep_info["action"] for ep_info in self.ep_info_buffer]))
+                self.logger.record("rollout/action_max_clip_mean", safe_mean([ep_info["action_max_clip"] for ep_info in self.ep_info_buffer]))
+                self.logger.record("rollout/action_min_clip_mean", safe_mean([ep_info["action_min_clip"] for ep_info in self.ep_info_buffer]))
+            self.logger.record("time/fps", fps)
+            self.logger.record("time/time_elapsed", int(time_elapsed))
+            self.logger.record("time/total_timesteps", self.num_timesteps)
+            self.logger.record("time/total_episodes", self.num_episodes)
+            self.logger.dump(step=self.num_timesteps)
+
+            if ((self.num_timesteps // self.checkpoint_freq > checkpoints) or self.num_timesteps > total_timesteps):
+                checkpoints += 1
+                self.save(self.log_dir / f"model/ckpt_{checkpoints}")
 
         return self
 
+    def load(
+        self,
+        path: Union[str, pathlib.Path, io.BufferedIOBase],
+        env: Environment,
+        device: Union[th.device, str] = "auto",
+        custom_objects: Optional[Dict[str, Any]] = None,
+        print_system_info: bool = False,
+        **kwargs,
+    ) -> PPOSelf:
+        """
+        Load the model from a zip-file.
+        Warning: ``load`` re-creates the model from scratch, it does not update it in-place!
+        For an in-place load use ``set_parameters`` instead.
+
+        :param path: path to the file (or a file-like) where to
+            load the agent from
+        :param env: the new environment to run the loaded model on
+            (can be None if you only need prediction from a trained model) has priority over any saved environment
+        :param device: Device on which the code should run.
+        :param custom_objects: Dictionary of objects to replace
+            upon loading. If a variable is present in this dictionary as a
+            key, it will not be deserialized and the corresponding item
+            will be used instead. Similar to custom_objects in
+            ``keras.models.load_model``. Useful when you have an object in
+            file that can not be deserialized.
+        :param print_system_info: Whether to print system info from the saved model
+            and the current system info (useful to debug loading issues)
+        :param kwargs: extra arguments to change the model when loading
+        :return: new model instance with loaded parameters
+        """
+        if print_system_info:
+            print("== CURRENT SYSTEM INFO ==")
+            get_system_info()
+
+        data, params, pytorch_variables = load_from_zip_file(
+            path,
+            device=device,
+            custom_objects=custom_objects,
+            print_system_info=print_system_info,
+        )
+
+        # Remove stored device information and replace with ours
+        if "policy_kwargs" in data:
+            if "device" in data["policy_kwargs"]:
+                del data["policy_kwargs"]["device"]
+
+        if "policy_kwargs" in kwargs and kwargs["policy_kwargs"] != data["policy_kwargs"]:
+            raise ValueError(
+                f"The specified policy kwargs do not equal the stored policy kwargs."
+                f"Stored kwargs: {data['policy_kwargs']}, specified kwargs: {kwargs['policy_kwargs']}"
+            )
+
+        if "observation_space" not in data or "action_space" not in data:
+            raise KeyError("The observation_space and action_space were not given, can't verify new environments")
+
+        # noinspection PyArgumentList
+        model = PPO(  # pytype: disable=not-instantiable,wrong-keyword-args
+            policy=data["policy_class"],
+            env=env,
+            device=device,
+            _init_setup_model=False,  # pytype: disable=not-instantiable,wrong-keyword-args
+        )
+
+        # load parameters
+        model.__dict__.update(data)
+        model.__dict__.update(kwargs)
+        model._setup_model()
+
+        # put state_dicts back in place
+        model.set_parameters(params, exact_match=True, device=device)
+
+        # put other pytorch variables back in place
+        if pytorch_variables is not None:
+            for name in pytorch_variables:
+                # Skip if PyTorch variable was not defined (to ensure backward compatibility).
+                # This happens when using SAC/TQC.
+                # SAC has an entropy coefficient which can be fixed or optimized.
+                # If it is optimized, an additional PyTorch variable `log_ent_coef` is defined,
+                # otherwise it is initialized to `None`.
+                if pytorch_variables[name] is None:
+                    continue
+                # Set the data attribute directly to avoid issue when using optimizers
+                # See https://github.com/DLR-RM/stable-baselines3/issues/391
+                recursive_setattr(model, name + ".data", pytorch_variables[name].data)
+
+        # Sample gSDE exploration matrix, so it uses the right device
+        # see issue #44
+        if model.use_sde:
+            model.policy.reset_noise()  # pytype: disable=attribute-error
+        return model
 
     def _get_torch_save_params(self) -> Tuple[List[str], List[str]]:
         state_dicts = ["policy", "policy.optimizer"]

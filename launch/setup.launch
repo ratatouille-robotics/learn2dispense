@@ -1,0 +1,4 @@
+<launch>
+    <include file="$(find ur5e_moveit_config)/launch/ur5e_moveit_planning_execution.launch"></include>
+    <node pkg="robotiq_urcap_control" type="robotic_urcap_ctrl_py3_wrapper.py" name="robotiq_urcap_control" />
+</launch>
