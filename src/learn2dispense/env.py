@@ -1,4 +1,5 @@
 import os
+import tf
 import gym
 import yaml
 import rospy
@@ -7,11 +8,13 @@ import pathlib
 import torch
 import numpy as np
 
+from geometry_msgs.msg import Pose
 from typing import Dict, List, Optional, Tuple
 from motion.commander import RobotMoveGroup
 from motion.utils import offset_pose, make_pose
 from stable_baselines3.common.policies import BasePolicy
 from learn2dispense.dispense_rollout import Dispenser
+from scipy.spatial.transform import Rotation as R
 
 
 class Environment:
@@ -20,21 +23,24 @@ class Environment:
     Generates data samples for learning by interacting with the environment.
     """
     HOME = [-0.5992, -2.4339, 2.2566, -2.9490, -1.0004, 3.0982]
-    SHELF_FRONT = [-0.05481, -2.0645, 2.480, -3.2914, 0.0045, 2.8663]
-    CONTAINER_SHELF_POSE_1 = [-0.144, -0.472, 0.477, 0.729, -0.004, -0.008, 0.685]
+    SHELF_FRONT = [-0.0142, -1.9426, 2.1134, -3.0728, 0.0594, 2.9016]
+    CONTAINER_SHELF_POSE_1 = [-0.291, -0.472, 0.726, 0.729, -0.004, -0.008, 0.685]
     CONTAINER_SHELF_POSE_2 = [-0.291, -0.472, 0.477, 0.729, -0.004, -0.008, 0.685]
     CONTAINER_SCALE_POSE = [-0.436, 0.029, 0.214, -0.498, 0.521, 0.498, -0.482]
+    MARKER_TO_TOOL0_OFFSET = [-0.0102, -0.0072, 0.127, 0.0587, 0.9962, -0.061, 0.0218]
 
     MIN_DISPENSE_WEIGHT = 10
     MAX_DISPENSE_WEIGHT = 100
     REFILL_THRESHOLD = 10
     EMPTY_CONTAINER_WEIGHT = 116.5
+    TAG_ID = 15
 
     def __init__(self, log_dir: pathlib.Path, pick_container_on_start: bool = True, log_rollout: bool = False, available_weight: Optional[float] = None) -> None:
         self.log_dir = log_dir
         self.log_rollout = log_rollout
         self.robot_mg = RobotMoveGroup()
         self.dispenser = Dispenser(self.robot_mg)
+        self.tf_listener = tf.TransformListener()
         self._pre_process()
         self.num_episodes = 0
         self.num_batches = 0
@@ -64,6 +70,34 @@ class Environment:
         with open(config_dir / "config/lentil_params.yaml") as f:
             self.ingredient_params = yaml.safe_load(f)
 
+    def get_transformation_matrix(self, trans: List, quat: List) -> np.ndarray:
+        matrix = np.eye(4, dtype=np.float64)
+        rot = R.from_quat(quat).as_matrix()
+        matrix[:3, :3] = rot
+        matrix[:3, -1] = trans
+
+        return matrix
+
+    def get_pose_from_matrix(self, matrix: np.ndarray) -> Pose:
+        pos = matrix[:3, -1].tolist()
+        quat = R.from_matrix(matrix[:3, :3]).as_quat().tolist()
+
+        return make_pose(pos, quat)
+
+    def compute_pick_pose(self, prior_pose: Optional[Pose] = None) -> Pose:
+        rospy.sleep(1)
+        trans, quat = self.tf_listener.lookupTransform("base_link", f"ar_marker_{self.TAG_ID}", rospy.Time(0))
+        base_T_marker = self.get_transformation_matrix(trans, quat)
+        marker_T_tool0 = self.get_transformation_matrix(self.MARKER_TO_TOOL0_OFFSET[:3], self.MARKER_TO_TOOL0_OFFSET[3:])
+        base_T_tool0 = base_T_marker @ marker_T_tool0
+        new_pose = self.get_pose_from_matrix(base_T_tool0)
+
+        if prior_pose is not None:
+            new_pose.position.z = prior_pose.position.z
+            new_pose.orientation = prior_pose.orientation
+
+        return new_pose
+
     def _pre_process(self):
         self.CONTAINER_SCALE_POSE = make_pose(self.CONTAINER_SCALE_POSE[:3], self.CONTAINER_SCALE_POSE[3:])
         self.CONTAINER_SHELF_POSE_1 = make_pose(self.CONTAINER_SHELF_POSE_1[:3], self.CONTAINER_SHELF_POSE_1[3:])
@@ -75,6 +109,8 @@ class Environment:
         # Go to designated pose
         assert self.robot_mg.go_to_joint_state(self.SHELF_FRONT, cartesian_path=False)
         assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.2, 0.0]), cartesian_path=False)
+        pick_pose = self.compute_pick_pose(pick_pose)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.2, 0.0]), acc_scaling=0.1, velocity_scaling=0.1)
         assert self.robot_mg.go_to_pose_goal(pick_pose, wait=True)
         # Close gripper
         assert self.robot_mg.close_gripper(wait=True)
@@ -92,6 +128,8 @@ class Environment:
         assert self.robot_mg.go_to_pose_goal(place_pose)
         # Open gripper
         self.robot_mg.open_gripper(wait=True)
+        self.robot_mg.close_gripper(wait=True, force=5, speed=20)
+        self.robot_mg.open_gripper(wait=True, force=5, speed=20)
         # Retract
         assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0.2, 0]))
         if return_home:
@@ -122,6 +160,8 @@ class Environment:
         assert self.robot_mg.go_to_pose_goal(self.CONTAINER_SCALE_POSE, wait=True)
         # Open gripper
         self.robot_mg.open_gripper(wait=True)
+        self.robot_mg.close_gripper(wait=True, force=5, speed=20)
+        self.robot_mg.open_gripper(wait=True, force=5, speed=20)
         # Retract
         assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0]))
         assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0.15]))
