@@ -2,21 +2,24 @@
     <include file="$(find ur5e_moveit_config)/launch/ur5e_moveit_planning_execution.launch"></include>
     <node pkg="robotiq_urcap_control" type="robotic_urcap_ctrl_py3_wrapper.py" name="robotiq_urcap_control" />
 
+
     <!-- Rviz launch -->
-    <arg name="rviz_config" default="$(find ur5e_moveit_config)/launch/moveit_ratatouille_autonomous_dispensing.rviz" />
+    <!-- <arg name="rviz_config" default="$(find ur5e_moveit_config)/launch/moveit_ratatouille_autonomous_dispensing.rviz" />
     <include file="$(find ur5e_moveit_config)/launch/moveit_rviz.launch">
       <arg name="rviz_config" value="$(arg rviz_config)" />
-    </include>
+    </include> -->
 
     <!-- RealSense Camera -->
-    <arg name="realsense_camera_type" default="d435" /> 
+    <!-- <arg name="realsense_camera_type" default="d435" /> 
     <include file="$(find realsense2_camera)/launch/rs_rgbd.launch">
       <arg name="device_type" value="$(arg realsense_camera_type)" />
       <arg name="enable_depth" value="true" />
-    </include>
+    </include> -->
 
     <!-- April Tag Tracking -->
-    <include file="$(find ar_track_alvar)/launch/realsense_rgb_track.launch">
+    <!-- <include file="$(find ar_track_alvar)/launch/realsense_rgb_track.launch">
       <arg name="marker_size" value="5.5" />
-    </include>
+    </include> -->
+
+
 </launch>

@@ -32,6 +32,7 @@ class Environment:
     MIN_DISPENSE_WEIGHT = 10
     MAX_DISPENSE_WEIGHT = 100
     REFILL_THRESHOLD = 10
+    ALMOST_CLOSED_STATE = 155
     EMPTY_CONTAINER_WEIGHT = 116.5
     TAG_ID = 15
 
@@ -103,17 +104,30 @@ class Environment:
         self.CONTAINER_SHELF_POSE_1 = make_pose(self.CONTAINER_SHELF_POSE_1[:3], self.CONTAINER_SHELF_POSE_1[3:])
         self.CONTAINER_SHELF_POSE_2 = make_pose(self.CONTAINER_SHELF_POSE_2[:3], self.CONTAINER_SHELF_POSE_2[3:])
 
+    def smart_gripper_close(self, pose: Pose, scoop_offset: Optional[List] = None):
+        assert self.robot_mg.close_gripper(wait=True, speed=10, force=5)
+        assert self.robot_mg.open_gripper(wait=True, target_state=self.ALMOST_CLOSED_STATE, speed=10, force=5)
+        scoop_pose = offset_pose(pose, scoop_offset)
+        assert self.robot_mg.go_to_pose_goal(scoop_pose, acc_scaling=0.01, velocity_scaling=0.01)
+        assert self.robot_mg.close_gripper(wait=True)
+        assert self.robot_mg.go_to_pose_goal(offset_pose(scoop_pose, [0, 0, 0.015]))
+
+    def smart_gripper_open(self):
+        self.robot_mg.open_gripper(wait=True, force=5, speed=10)
+        self.robot_mg.close_gripper(wait=True, force=5, speed=10)
+        self.robot_mg.open_gripper(wait=True, force=5, speed=20)
+
     def pick_container_from_shelf(self, pick_pose, return_home: bool = False):
         # Open gripper
         self.robot_mg.open_gripper(wait=True)
         # Go to designated pose
         assert self.robot_mg.go_to_joint_state(self.SHELF_FRONT, cartesian_path=False)
         assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.2, 0.0]), cartesian_path=False)
-        pick_pose = self.compute_pick_pose(pick_pose)
-        assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.2, 0.0]), acc_scaling=0.1, velocity_scaling=0.1)
+        # pick_pose = self.compute_pick_pose(pick_pose)
+        # assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.2, 0.0]), acc_scaling=0.1, velocity_scaling=0.1)
         assert self.robot_mg.go_to_pose_goal(pick_pose, wait=True)
         # Close gripper
-        assert self.robot_mg.close_gripper(wait=True)
+        self.smart_gripper_close(pick_pose, scoop_offset=[0, -0.005, 0])
         # Retract
         assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.0, 0.015]))
         assert self.robot_mg.go_to_pose_goal(offset_pose(pick_pose, [0, 0.2, 0.015]))
@@ -127,9 +141,7 @@ class Environment:
         assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0, 0.015]))
         assert self.robot_mg.go_to_pose_goal(place_pose)
         # Open gripper
-        self.robot_mg.open_gripper(wait=True)
-        self.robot_mg.close_gripper(wait=True, force=5, speed=20)
-        self.robot_mg.open_gripper(wait=True, force=5, speed=20)
+        self.smart_gripper_open()
         # Retract
         assert self.robot_mg.go_to_pose_goal(offset_pose(place_pose, [0, 0.2, 0]))
         if return_home:
@@ -159,9 +171,7 @@ class Environment:
         )
         assert self.robot_mg.go_to_pose_goal(self.CONTAINER_SCALE_POSE, wait=True)
         # Open gripper
-        self.robot_mg.open_gripper(wait=True)
-        self.robot_mg.close_gripper(wait=True, force=5, speed=20)
-        self.robot_mg.open_gripper(wait=True, force=5, speed=20)
+        self.smart_gripper_open()
         # Retract
         assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0]))
         assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0.15]))

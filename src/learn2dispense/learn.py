@@ -22,7 +22,7 @@ if __name__ == "__main__":
             env=env,
             log_dir=log_dir
         )
-        model.learn(total_timesteps=100000)
+        model.learn(total_timesteps=500000)
 
     except rospy.ROSInterruptException:
         sys.exit(1)
