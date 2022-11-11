@@ -95,7 +95,7 @@ class PPO(BaseAlgorithm):
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
         target_kl: Optional[float] = None,
-        log_dir: Optional[str] = None,
+        log_dir: Optional[pathlib.Path] = None,
         checkpoint_freq: int = 5000,
         policy_kwargs: Optional[Dict[str, Any]] = None,
         verbose: int = 0,
@@ -108,7 +108,7 @@ class PPO(BaseAlgorithm):
             policy,
             env=None,
             learning_rate=learning_rate,
-            tensorboard_log=log_dir / "tb_data",
+            tensorboard_log=log_dir / "tb_data" if log_dir is not None else None,
             policy_kwargs=policy_kwargs,
             verbose=verbose,
             device=device,
@@ -387,8 +387,8 @@ class PPO(BaseAlgorithm):
 
         if self.ep_info_buffer is None or reset_num_timesteps:
             # Initialize buffers if they don't exist, or reinitialize if resetting counters
-            self.ep_info_buffer = deque(maxlen=20)
-            self.ep_success_buffer = deque(maxlen=20)
+            self.ep_info_buffer = deque()
+            self.ep_success_buffer = deque()
 
         if self.action_noise is not None:
             self.action_noise.reset()
@@ -448,6 +448,8 @@ class PPO(BaseAlgorithm):
                 self.logger.record("rollout/ep_action_mean", safe_mean([ep_info["action"] for ep_info in self.ep_info_buffer]))
                 self.logger.record("rollout/action_max_clip_mean", safe_mean([ep_info["action_max_clip"] for ep_info in self.ep_info_buffer]))
                 self.logger.record("rollout/action_min_clip_mean", safe_mean([ep_info["action_min_clip"] for ep_info in self.ep_info_buffer]))
+                self.ep_info_buffer.clear()
+                self.ep_success_buffer.clear()
             self.logger.record("time/fps", fps)
             self.logger.record("time/time_elapsed", int(time_elapsed))
             self.logger.record("time/total_timesteps", self.num_timesteps)
@@ -460,6 +462,7 @@ class PPO(BaseAlgorithm):
 
         return self
 
+    @classmethod
     def load(
         self,
         path: Union[str, pathlib.Path, io.BufferedIOBase],

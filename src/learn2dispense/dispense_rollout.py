@@ -59,9 +59,6 @@ class Dispenser:
     OBS_MEAN = [50, -25, 0, 0, 0]
     OBS_STD = [50, 25, MAX_ROT_VEL, MAX_ROT_ACC, MAX_ROT_VEL]
 
-    REWARD_MEAN = -2
-    REWARD_STD = 20
-
     def __init__(self, robot_mg: RobotMoveGroup) -> None:
         assert (T_STEP / CONTROL_STEP).is_integer()
         # Setup comm with the weighing scale
@@ -114,10 +111,9 @@ class Dispenser:
         self.rollout_data["log_prob"] = []
 
     def compute_rewards(self) -> np.ndarray:
-        rewards = -1 * np.ones(len(self.rollout_data["error"]), dtype=np.float32)
-        if self.success:
-            rewards[-1] = -500
-        rewards = (rewards - self.REWARD_MEAN) / self.REWARD_STD
+        rewards = -0.1 * np.ones(len(self.rollout_data["error"]), dtype=np.float32)
+        if not self.success:
+            rewards[-1] = -20
 
         return rewards
 
@@ -153,7 +149,7 @@ class Dispenser:
             "episode": {
                 "r": np.mean(outputs["reward"]),
                 "l": self.steps,
-                "return": np.mean(outputs["reward"]),
+                "return": np.sum(outputs["reward"]),
                 "dispense_time": self.dispense_time,
                 "action": np.mean(outputs["action"]),
                 "action_max_clip": np.mean(self.rollout_data["action_max_clip"]),
