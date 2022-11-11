@@ -269,7 +269,7 @@ class Dispenser:
 
         # Run controller as long as error is not within tolerance
         while error > err_threshold:
-            iter_start_time = time.time() - start_time
+            curr_time = time.time() - start_time
             curr_wt, is_recent = self.get_weight_fb()
             wt_fb_acc.append(curr_wt)
             if not is_recent:
@@ -296,7 +296,7 @@ class Dispenser:
 
             total_vel = pid_vel
 
-            self.rollout_data["time"].append(iter_start_time)
+            self.rollout_data["time"].append(curr_time)
             self.rollout_data["velocity"].append(self.last_vel)
             self.rollout_data["acceleration"].append(self.last_acc)
             self.rollout_data["pid_output"].append(pid_vel)
@@ -328,6 +328,10 @@ class Dispenser:
             curr_pose = self.robot_mg.get_current_pose()
             if np.abs(get_rotation(start_T, T.pose2matrix(curr_pose))[0]) >= self.angle_limit:
                 rospy.logerr("Container does not seem to have sufficient ingredient quantity...")
+                success = False
+                break
+            if curr_time > 150:
+                rospy.logerr("Robot possibly stuck in a jitter. Stopping dispensing...")
                 success = False
                 break
 
