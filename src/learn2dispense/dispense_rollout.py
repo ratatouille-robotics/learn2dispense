@@ -296,7 +296,7 @@ class Dispenser:
             pid_vel = max(min(pid_vel, max_vel), min_vel)
             pid_vel = np.clip(pid_vel, self.min_rot_vel, self.max_rot_vel)
 
-            total_vel = pid_vel
+            unclipped_total_vel = pid_vel
 
             self.rollout_data["time"].append(curr_time)
             self.rollout_data["velocity"].append(self.last_vel)
@@ -312,12 +312,13 @@ class Dispenser:
                     action, value, log_prob = policy(obs_tensor)
                 action = action.cpu().item()
 
-                total_vel += (LEARNING_MAX_VEL * action)
+                unclipped_total_vel += (LEARNING_MAX_VEL * action)
 
+            total_vel = np.clip(unclipped_total_vel, self.min_rot_vel, self.max_rot_vel)
             self.run_control_loop(total_vel)
 
-            self.rollout_data["action_max_clip"].append(max(total_vel - max_vel, 0))
-            self.rollout_data["action_min_clip"].append(max(min_vel - total_vel, 0))
+            self.rollout_data["action_max_clip"].append(max(unclipped_total_vel - max_vel, 0))
+            self.rollout_data["action_min_clip"].append(max(min_vel - unclipped_total_vel, 0))
             self.rollout_data["action"].append(action)
             self.rollout_data["value"].append(value.squeeze())
             self.rollout_data["log_prob"].append(log_prob.squeeze())
