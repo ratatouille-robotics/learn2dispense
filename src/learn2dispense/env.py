@@ -3,18 +3,19 @@ import tf
 import gym
 import yaml
 import rospy
+import torch
 import pickle
 import pathlib
-import torch
 import numpy as np
 
 from geometry_msgs.msg import Pose
 from typing import Dict, List, Optional, Tuple
+from scipy.spatial.transform import Rotation as R
+from stable_baselines3.common.policies import BasePolicy
+
 from motion.commander import RobotMoveGroup
 from motion.utils import offset_pose, make_pose
-from stable_baselines3.common.policies import BasePolicy
 from learn2dispense.dispense_rollout import Dispenser
-from scipy.spatial.transform import Rotation as R
 
 
 class Environment:
@@ -36,7 +37,13 @@ class Environment:
     EMPTY_CONTAINER_WEIGHT = 116.5
     TAG_ID = 15
 
-    def __init__(self, log_dir: pathlib.Path, pick_container_on_start: bool = True, log_rollout: bool = False, available_weight: Optional[float] = None) -> None:
+    def __init__(
+        self,
+        log_dir: pathlib.Path,
+        pick_container_on_start: bool = True,
+        log_rollout: bool = False,
+        available_weight: Optional[float] = None
+    ) -> None:
         self.log_dir = log_dir
         self.log_rollout = log_rollout
         self.robot_mg = RobotMoveGroup()

@@ -53,7 +53,7 @@ def run():
 
         tf_listener = tf.TransformListener()
         rospy.sleep(1)
-        trans_1, quat_1 = tf_listener.lookupTransform('base_link', 'ar_marker_15', rospy.Time(0))
+        trans_1, quat_1 = tf_listener.lookupTransform("base_link", "ar_marker_15", rospy.Time(0))
         T_1 = get_T_matrix(trans_1, quat_1)
         P_1 = get_T_matrix(CONTAINER_SHELF_POSE_1[:3], CONTAINER_SHELF_POSE_1[3:])
         offset_1 = get_offset(np.linalg.inv(T_1) @ P_1)
@@ -67,7 +67,7 @@ def run():
         assert robot_mg.go_to_pose_goal(offset_pose(pose_2, [0, 0.2, 0.0]))
         rospy.sleep(2)
 
-        trans_2, quat_2 = tf_listener.lookupTransform('base_link', 'ar_marker_15', rospy.Time(0))
+        trans_2, quat_2 = tf_listener.lookupTransform("base_link", "ar_marker_15", rospy.Time(0))
         T_2 = get_T_matrix(trans_2, quat_2)
         P_2 = get_T_matrix(CONTAINER_SHELF_POSE_2[:3], CONTAINER_SHELF_POSE_2[3:])
         offset_2 = get_offset(np.linalg.inv(T_2) @ P_2)
@@ -77,7 +77,6 @@ def run():
 
     print("Translation: ", np.mean(TRANS, axis=0))
     print("Rotation: ", np.mean(QUAT, axis=0))
-    
 
 
 if __name__ == "__main__":

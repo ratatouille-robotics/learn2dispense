@@ -3,15 +3,16 @@ import time
 import rospy
 import numpy as np
 import torch as th
-from typing import Tuple, Dict, Optional
 from collections import deque
+from typing import Tuple, Dict, Optional
 
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.utils import obs_as_tensor
-from motion.utils import make_pose
-from motion.commander import RobotMoveGroup
-from sensor_interface.msg import Weight
+
 import dispense.transforms as T
+from motion.utils import make_pose
+from sensor_interface.msg import Weight
+from motion.commander import RobotMoveGroup
 from dispense.dispense import get_transform, get_rotation
 
 
@@ -54,6 +55,7 @@ POURING_POSES = {
 
 class Dispenser:
 
+    # TODO: Add angle, fill-level
     OBS_DATA = ["error", "error_rate", "velocity", "acceleration", "pid_output"]
     OBS_HIST_LENGTH = [5, 5, 1, 1, 1]
     OBS_MEAN = [50, -25, 0, 0, 0]

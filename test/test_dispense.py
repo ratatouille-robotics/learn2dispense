@@ -33,7 +33,7 @@ def acquire_input(message: str) -> float:
     return input_wt
 
 
-def run(log_results=False):
+def run(log_results: bool = False):
     rospy.init_node("ur5e_dispense_test")
     robot_mg = RobotMoveGroup()
     dispenser = Dispenser(robot_mg)
@@ -71,7 +71,7 @@ def run(log_results=False):
 
         # Get next entry from user
         input_wt = acquire_input("Enter desired ingredient quantity (in grams): ")
-    
+
     if log_results:
         out_file.close()
 
