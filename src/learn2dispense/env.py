@@ -248,7 +248,8 @@ class Environment:
 
     @property
     def observation_space(self) -> gym.spaces.Space:
-        observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32)
+        obs_size = np.sum(self.dispenser.OBS_HIST_LENGTH)
+        observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(obs_size,), dtype=np.float32)
 
         return observation_space
 

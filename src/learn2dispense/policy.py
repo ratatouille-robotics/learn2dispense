@@ -66,9 +66,8 @@ class SquashedGaussianDistribution(Distribution):
         log_prob = self.distribution.log_prob(actions)
         return sum_independent_dims(log_prob)
 
-    def entropy(self) -> th.Tensor:
-        # TODO: Wrong entropy calculation
-        return sum_independent_dims(self.distribution.base_dist.entropy())
+    def entropy(self) -> Optional[th.Tensor]:
+        return None
 
     def sample(self) -> th.Tensor:
         # Reparametrization trick to pass gradients

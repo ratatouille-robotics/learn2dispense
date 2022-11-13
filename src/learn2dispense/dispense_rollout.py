@@ -56,10 +56,10 @@ POURING_POSES = {
 class Dispenser:
 
     # TODO: Add angle, fill-level
-    OBS_DATA = ["error", "error_rate", "velocity", "acceleration", "pid_output"]
-    OBS_HIST_LENGTH = [5, 5, 1, 1, 1]
-    OBS_MEAN = [50, -25, 0, 0, 0]
-    OBS_STD = [50, 25, MAX_ROT_VEL, MAX_ROT_ACC, MAX_ROT_VEL]
+    OBS_DATA = ["error", "error_rate", "velocity", "acceleration", "pid_output", "angle_fb"]
+    OBS_HIST_LENGTH = [5, 5, 1, 1, 1, 1]
+    OBS_MEAN = [50, -25, 0, 0, 0, (np.pi / 6)]
+    OBS_STD = [50, 25, MAX_ROT_VEL, MAX_ROT_ACC, MAX_ROT_VEL, (np.pi / 6)]
 
     def __init__(self, robot_mg: RobotMoveGroup) -> None:
         assert (T_STEP / CONTROL_STEP).is_integer()
@@ -87,16 +87,22 @@ class Dispenser:
 
     def get_last_state(self) -> np.ndarray:
         last_obs = []
-        for i, obs_item in enumerate(self.OBS_DATA):
-            avail_size = len(self.rollout_data[obs_item])
+        for i, obs_var in enumerate(self.OBS_DATA):
+            avail_size = len(self.rollout_data[obs_var])
             reqd_size = self.OBS_HIST_LENGTH[i]
-            if avail_size >= reqd_size:
-                last_obs.append(self.rollout_data[obs_item][-reqd_size:])
-            else:
-                last_obs.append(self.rollout_data[obs_item][-avail_size:])
-                last_obs.append((reqd_size - avail_size) * [self.rollout_data[obs_item][0],])
+            
+            t = 1
+            while(reqd_size > 0 and avail_size > 0):
+                last_obs.append((self.rollout_data[obs_var][-t] - self.OBS_MEAN[i]) / self.OBS_STD[i])
+                reqd_size -= 1
+                avail_size -= 1
+                t += 1
 
-        last_obs = np.concatenate(last_obs, axis=-1)
+            while(reqd_size > 0):
+                last_obs.append((self.rollout_data[obs_var][0] - self.OBS_MEAN[i]) / self.OBS_STD[i])
+                reqd_size -= 1
+
+        last_obs = np.array(last_obs, dtype=np.float32)
 
         return last_obs
 
@@ -132,7 +138,7 @@ class Dispenser:
             data = np.zeros((self.steps, self.OBS_HIST_LENGTH[i]), dtype=np.float32)
             for t_step in range(self.OBS_HIST_LENGTH[i]):
                 data[t_step:, t_step] = self.rollout_data[obs_item][: self.steps - t_step]
-                if obs_item in ["error"]:
+                if self.OBS_HIST_LENGTH[i] > 1:
                     data[:t_step, t_step] = data[0, 0]
             data = (data - self.OBS_MEAN[i]) / self.OBS_STD[i]
             obs.append(data)
@@ -149,11 +155,11 @@ class Dispenser:
         outputs["log_prob"] = self.rollout_data["log_prob"]
         info = {
             "episode": {
-                "r": np.mean(outputs["reward"]),
-                "l": self.steps,
+                "mean_reward": np.mean(outputs["reward"]),
+                "length": self.steps,
                 "return": np.sum(outputs["reward"]),
                 "dispense_time": self.dispense_time,
-                "action": np.mean(outputs["action"]),
+                "mean_action": np.mean(outputs["action"]),
                 "action_max_clip": np.mean(self.rollout_data["action_max_clip"]),
                 "action_min_clip": np.mean(self.rollout_data["action_min_clip"])
             },
@@ -184,7 +190,7 @@ class Dispenser:
         self.max_rot_vel = self.ctrl_params["vel_scaling"] * MAX_ROT_VEL
         self.min_rot_vel = self.ctrl_params["vel_scaling"] * MIN_ROT_VEL
         self.max_rot_acc = self.ctrl_params["acc_scaling"] * MAX_ROT_ACC
-        self.min_rot_acc = self.ctrl_params["vel_scaling"] * MIN_ROT_ACC
+        self.min_rot_acc = self.ctrl_params["acc_scaling"] * MIN_ROT_ACC
 
         # Move to dispense-start position
         pos, orient = POURING_POSES[self.lid_type][ingredient_params["pouring_position"]]
@@ -298,12 +304,23 @@ class Dispenser:
 
             unclipped_total_vel = pid_vel
 
-            self.rollout_data["time"].append(curr_time)
+            # Check if the angluar limits about the pouring axis have been reached
+            curr_pose = self.robot_mg.get_current_pose()
+            angle, axis = get_rotation(start_T, T.pose2matrix(curr_pose))
+            if np.sum(axis * self.base_raw_twist[-3:]) < 0:
+                angle *= -1
+
+            if np.abs(angle) >= self.angle_limit:
+                rospy.logerr("Container does not seem to have sufficient ingredient quantity...")
+                success = False
+                break
+
+            self.rollout_data["error"].append(error)
+            self.rollout_data["error_rate"].append(error_rate)
             self.rollout_data["velocity"].append(self.last_vel)
             self.rollout_data["acceleration"].append(self.last_acc)
             self.rollout_data["pid_output"].append(pid_vel)
-            self.rollout_data["error"].append(error)
-            self.rollout_data["error_rate"].append(error_rate)
+            self.rollout_data["angle_fb"].append(angle)
 
             if policy is not None:
                 with th.no_grad():
@@ -317,9 +334,10 @@ class Dispenser:
             total_vel = np.clip(unclipped_total_vel, self.min_rot_vel, self.max_rot_vel)
             self.run_control_loop(total_vel)
 
+            self.rollout_data["time"].append(curr_time)
+            self.rollout_data["action"].append(action)
             self.rollout_data["action_max_clip"].append(max(unclipped_total_vel - max_vel, 0))
             self.rollout_data["action_min_clip"].append(max(min_vel - unclipped_total_vel, 0))
-            self.rollout_data["action"].append(action)
             self.rollout_data["value"].append(value.squeeze())
             self.rollout_data["log_prob"].append(log_prob.squeeze())
             self.steps += 1
@@ -327,12 +345,6 @@ class Dispenser:
             self.last_acc = (total_vel - self.last_vel) / T_STEP
             self.last_vel = total_vel
 
-            # Check if the angluar limits about the pouring axis have been reached
-            curr_pose = self.robot_mg.get_current_pose()
-            if np.abs(get_rotation(start_T, T.pose2matrix(curr_pose))[0]) >= self.angle_limit:
-                rospy.logerr("Container does not seem to have sufficient ingredient quantity...")
-                success = False
-                break
             if curr_time > 150:
                 rospy.logerr("Robot possibly stuck in a jitter. Stopping dispensing...")
                 success = False
