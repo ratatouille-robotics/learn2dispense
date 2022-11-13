@@ -42,7 +42,7 @@ class SquashedGaussianDistribution(Distribution):
         log_std = nn.Parameter(th.ones(self.action_dim) * log_std_init, requires_grad=True)
         return mean_actions, log_std
 
-    def proba_distribution(self, mean_actions: th.Tensor, log_std: th.Tensor) -> "DiagGaussianDistribution":
+    def proba_distribution(self, mean_actions: th.Tensor, log_std: th.Tensor) -> "SquashedGaussianDistribution":
         """
         Create the distribution given its parameters (mean, std)
 
