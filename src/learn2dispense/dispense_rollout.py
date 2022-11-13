@@ -61,13 +61,21 @@ class Dispenser:
     OBS_MEAN = [50, -25, 0, 0, 0, (np.pi / 6)]
     OBS_STD = [50, 25, MAX_ROT_VEL, MAX_ROT_ACC, MAX_ROT_VEL, (np.pi / 6)]
 
-    def __init__(self, robot_mg: RobotMoveGroup) -> None:
+    FULL_FILL_WEIGHT = 1400
+
+    def __init__(self, robot_mg: RobotMoveGroup, use_fill_level: bool = False) -> None:
         assert (T_STEP / CONTROL_STEP).is_integer()
         # Setup comm with the weighing scale
         self.wt_subscriber = rospy.Subscriber("/cooking_pot/weighing_scale", Weight, callback=self._weight_callback)
         self.rate = rospy.Rate(1 / CONTROL_STEP)
         self.robot_mg = robot_mg
         self._w_data = None
+        self.use_fill_level = use_fill_level
+        if use_fill_level:
+            self.OBS_DATA.append("fill_ratio")
+            self.OBS_HIST_LENGTH.append(1)
+            self.OBS_MEAN.append(0.5)
+            self.OBS_STD.append(0.5)
 
     def _weight_callback(self, data: float) -> None:
         self._w_data = data
@@ -172,7 +180,8 @@ class Dispenser:
         self,
         ingredient_params: dict,
         target_wt: float,
-        policy: Optional[BasePolicy] = None
+        policy: Optional[BasePolicy] = None,
+        ingredient_wt_start: Optional[float] = None,
     ) -> Tuple[bool, float, Dict, Dict]:
         # Record current robot position
         robot_original_pose = self.robot_mg.get_current_pose()
@@ -185,6 +194,7 @@ class Dispenser:
         if self.lid_type in ["none", "slot"]:
             self.lid_type = "regular"
         self.container_offset = CONTAINER_OFFSET[self.lid_type]
+        self.ingredient_wt_start = ingredient_wt_start
 
         # set ingredient-specific limits
         self.max_rot_vel = self.ctrl_params["vel_scaling"] * MAX_ROT_VEL
@@ -321,6 +331,9 @@ class Dispenser:
             self.rollout_data["acceleration"].append(self.last_acc)
             self.rollout_data["pid_output"].append(pid_vel)
             self.rollout_data["angle_fb"].append(angle)
+            if self.use_fill_level:
+                ingredient_wt_current = self.ingredient_wt_start - (curr_wt - self.start_wt)
+                self.rollout_data["fill_ratio"].append(ingredient_wt_current / self.FULL_FILL_WEIGHT)
 
             if policy is not None:
                 with th.no_grad():

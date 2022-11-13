@@ -42,12 +42,13 @@ class Environment:
         log_dir: pathlib.Path,
         pick_container_on_start: bool = True,
         log_rollout: bool = False,
-        available_weight: Optional[float] = None
+        available_weight: Optional[float] = None,
+        use_fill_level: bool = False
     ) -> None:
         self.log_dir = log_dir
         self.log_rollout = log_rollout
         self.robot_mg = RobotMoveGroup()
-        self.dispenser = Dispenser(self.robot_mg)
+        self.dispenser = Dispenser(robot_mg=self.robot_mg, use_fill_level=use_fill_level)
         self.tf_listener = tf.TransformListener()
         self._pre_process()
         self.num_episodes = 0
@@ -192,6 +193,11 @@ class Environment:
         self.place_container_on_scale()
         self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1, return_home=True)
 
+    def restore_initial_env_state(self):
+        self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
+        self.pick_container_from_scale()
+        self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_1)
+
     def sample_weight(self) -> float:
         return np.random.uniform(self.MIN_DISPENSE_WEIGHT, min(self.MAX_DISPENSE_WEIGHT, self.available_weight))
 
@@ -214,7 +220,10 @@ class Environment:
             target_wt = self.sample_weight()
             rospy.loginfo(f"[{current_steps}/{total_steps}]:\t Requested Wt: {target_wt:0.4f} g")
             completed, dispensed_wt, rollout_data, info = self.dispenser.dispense_ingredient(
-                ingredient_params=self.ingredient_params, target_wt=target_wt, policy=policy
+                ingredient_params=self.ingredient_params,
+                target_wt=target_wt,
+                policy=policy,
+                ingredient_wt_start=self.available_weight
             )
             self.available_weight -= max(0, dispensed_wt)
             rospy.loginfo(f"Available ingredient quantity: {self.available_weight:0.2f} g")

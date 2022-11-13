@@ -23,6 +23,7 @@ if __name__ == "__main__":
             log_dir=log_dir
         )
         model.learn(total_timesteps=500000)
+        env.restore_initial_env_state()
 
     except rospy.ROSInterruptException:
         sys.exit(1)
