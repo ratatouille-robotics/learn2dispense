@@ -5,7 +5,7 @@ from torch import nn
 from functools import partial
 from torch.distributions import Normal, TanhTransform, TransformedDistribution
 from torch.nn.functional import softplus
-from typing import Any, Dict, Optional, Tuple, Type
+from typing import Any, Dict, Optional, Tuple, Type, Union
 
 from stable_baselines3.common.type_aliases import Schedule
 from stable_baselines3.common.policies import ActorCriticPolicy
@@ -16,18 +16,20 @@ from stable_baselines3.common.distributions import Distribution, sum_independent
 
 class SquashedGaussianDistribution(Distribution):
     """
-    Gaussian distribution with diagonal covariance matrix, for continuous actions.
+    Gaussian distribution clamped with a Tanh transformation to keep samples
+    between the range -1 and 1.
 
     :param action_dim:  Dimension of the action space.
     """
 
-    def __init__(self, action_dim: int):
+    def __init__(self, action_dim: int, use_state_dependent_std: bool = False):
         super().__init__()
         self.action_dim = action_dim
         self.mean_actions = None
         self.log_std = None
+        self.use_state_dependent_std = use_state_dependent_std
 
-    def proba_distribution_net(self, latent_dim: int, log_std_init: float = 0.0) -> Tuple[nn.Module, nn.Parameter]:
+    def proba_distribution_net(self, latent_dim: int, log_std_init: float = 0.0) -> Tuple[nn.Module, Union[nn.Parameter, nn.Module]]:
         """
         Create the layers and parameter that represent the distribution:
         one output will be the mean of the Gaussian, the other parameter will be the
@@ -37,20 +39,28 @@ class SquashedGaussianDistribution(Distribution):
         :param log_std_init: Initial value for the log standard deviation
         :return:
         """
-        mean_actions = nn.Linear(latent_dim, self.action_dim)
-        # TODO: allow action dependent std
-        log_std = nn.Parameter(th.ones(self.action_dim) * log_std_init, requires_grad=True)
-        return mean_actions, log_std
+        std_init = np.exp(log_std_init)
+        std_param_init = np.log(np.exp(std_init) - 1)
 
-    def proba_distribution(self, mean_actions: th.Tensor, log_std: th.Tensor) -> "SquashedGaussianDistribution":
+        mean_actions = nn.Linear(latent_dim, self.action_dim)
+
+        if self.use_state_dependent_std:
+            std_model = nn.Linear(latent_dim, 1)
+            std_model.bias.data = np.ones_like(std_model.bias.data) * std_param_init
+        else:
+            std_model = nn.Parameter(th.ones(self.action_dim) * std_param_init, requires_grad=True)
+
+        return mean_actions, std_model
+
+    def proba_distribution(self, mean_actions: th.Tensor, unnormalized_std: th.Tensor) -> "SquashedGaussianDistribution":
         """
         Create the distribution given its parameters (mean, std)
 
         :param mean_actions:
-        :param log_std:
+        :param unnormalized_std:
         :return:
         """
-        action_std = th.ones_like(mean_actions) * softplus(log_std)
+        action_std = th.ones_like(mean_actions) * softplus(unnormalized_std)
         base_dist = Normal(mean_actions, action_std)
         self.distribution = TransformedDistribution(base_dist, transforms=[TanhTransform()])
         return self
@@ -76,21 +86,23 @@ class SquashedGaussianDistribution(Distribution):
     def mode(self) -> th.Tensor:
         return self.distribution.mean
 
-    def actions_from_params(self, mean_actions: th.Tensor, log_std: th.Tensor, deterministic: bool = False) -> th.Tensor:
+    def actions_from_params(
+        self, mean_actions: th.Tensor, unnormalized_std: th.Tensor, deterministic: bool = False
+    ) -> th.Tensor:
         # Update the proba distribution
-        self.proba_distribution(mean_actions, log_std)
+        self.proba_distribution(mean_actions, unnormalized_std)
         return self.get_actions(deterministic=deterministic)
 
-    def log_prob_from_params(self, mean_actions: th.Tensor, log_std: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+    def log_prob_from_params(self, mean_actions: th.Tensor, unnormalized_std: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
         """
         Compute the log probability of taking an action
         given the distribution parameters.
 
         :param mean_actions:
-        :param log_std:
+        :param unnormalized_std:
         :return:
         """
-        actions = self.actions_from_params(mean_actions, log_std)
+        actions = self.actions_from_params(mean_actions, unnormalized_std)
         log_prob = self.log_prob(actions)
         return actions, log_prob
 
@@ -105,6 +117,7 @@ class SimplePolicy(ActorCriticPolicy):
         activation_fn: Type[nn.Module] = nn.Tanh,
         ortho_init: bool = True,
         log_std_init: float = -0.5,
+        use_state_dependent_std: bool = True,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -117,13 +130,15 @@ class SimplePolicy(ActorCriticPolicy):
             activation_fn=activation_fn,
             ortho_init=ortho_init,
             log_std_init=log_std_init,
-            features_extractor_class = FlattenExtractor,
-            features_extractor_kwargs = None,
-            normalize_images = False,
-            optimizer_class = optimizer_class,
-            optimizer_kwargs = optimizer_kwargs,
+            features_extractor_class=FlattenExtractor,
+            features_extractor_kwargs=None,
+            normalize_images=False,
+            optimizer_class=optimizer_class,
+            optimizer_kwargs=optimizer_kwargs,
         )
-    
+
+        self.use_state_dependent_std = use_state_dependent_std
+
     def _build(self, lr_schedule: Schedule) -> None:
         """
         Create the networks and the optimizer.
@@ -135,11 +150,14 @@ class SimplePolicy(ActorCriticPolicy):
 
         latent_dim_pi = self.mlp_extractor.latent_dim_pi
 
-        print(self.dist_kwargs)
-        self.action_dist = SquashedGaussianDistribution(get_action_dim(self.action_space))
-        self.action_net, self.log_std = self.action_dist.proba_distribution_net(
-                latent_dim=latent_dim_pi, log_std_init=self.log_std_init
-            )
+        self.action_dist = SquashedGaussianDistribution(
+            action_dim=get_action_dim(self.action_space),
+            use_state_dependent_std=self.use_state_dependent_std
+        )
+        self.action_net, self.std_model = self.action_dist.proba_distribution_net(
+            latent_dim=latent_dim_pi,
+            log_std_init=self.log_std_init
+        )
 
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
         # Init weights: use orthogonal initialization
@@ -155,6 +173,9 @@ class SimplePolicy(ActorCriticPolicy):
                 self.action_net: 0.01,
                 self.value_net: 1,
             }
+            if self.use_state_dependent_std:
+                module_gains[self.std_model] = 0.01
+
             for module, gain in module_gains.items():
                 module.apply(partial(self.init_weights, gain=gain))
 
@@ -169,4 +190,19 @@ class SimplePolicy(ActorCriticPolicy):
         :return: Action distribution
         """
         mean_actions = self.action_net(latent_pi)
-        return self.action_dist.proba_distribution(mean_actions, self.log_std)
+        if self.use_state_dependent_std:
+            std_unnormalized = self.std_model(latent_pi)
+        else:
+            std_unnormalized = self.std_model
+
+        return self.action_dist.proba_distribution(mean_actions, std_unnormalized)
+
+    def get_std(self, obs: th.Tensor) -> th.Tensor:
+        if self.use_state_dependent_std:
+            features = self.extract_features(obs)
+            latent_pi, _ = self.mlp_extractor(features)
+            unnormalized_std = self.std_model(latent_pi)
+        else:
+            unnormalized_std = self.std_model
+
+        return softplus(unnormalized_std)

@@ -349,8 +349,10 @@ class PPO(BaseAlgorithm):
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
-        if hasattr(self.policy, "log_std"):
-            self.logger.record("train/std", F.softplus(self.policy.log_std).mean().item())
+        obs = self.rollout_buffer.get(len(self.rollout_buffer))
+        with th.no_grad():
+            std = self.policy.get_std(obs)
+        self.logger.record("train/std", std.mean().item())
 
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)
