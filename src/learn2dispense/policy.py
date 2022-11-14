@@ -126,7 +126,7 @@ class SimplePolicy(ActorCriticPolicy):
             observation_space=observation_space,
             action_space=action_space,
             lr_schedule=lr_schedule,
-            net_arch=[dict(pi=[32,], vf=[32,])],
+            net_arch=[dict(pi=[32, 32], vf=[64, 64])],
             activation_fn=activation_fn,
             ortho_init=ortho_init,
             log_std_init=log_std_init,

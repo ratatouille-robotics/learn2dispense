@@ -13,7 +13,6 @@ from torch.nn import functional as F
 
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.base_class import BaseAlgorithm
-from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.type_aliases import Schedule
 from stable_baselines3.common.save_util import load_from_zip_file, recursive_setattr
@@ -26,6 +25,7 @@ from stable_baselines3.common.utils import (
 )
 
 from learn2dispense.env import Environment
+from learn2dispense.policy import SimplePolicy
 
 PPOSelf = TypeVar("PPOSelf", bound="PPO")
 
@@ -80,7 +80,7 @@ class PPO(BaseAlgorithm):
 
     def __init__(
         self,
-        policy: Union[str, Type[ActorCriticPolicy]],
+        policy: Union[str, Type[SimplePolicy]],
         env: Environment,
         learning_rate: Union[float, Schedule] = 3e-4,
         n_steps: int = 2048,
