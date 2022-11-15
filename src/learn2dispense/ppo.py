@@ -82,7 +82,7 @@ class PPO(BaseAlgorithm):
         self,
         policy: Union[str, Type[SimplePolicy]],
         env: Environment,
-        learning_rate: Union[float, Schedule] = 3e-4,
+        learning_rate: float = 3e-4,
         n_steps: int = 2048,
         batch_size: int = 64,
         n_epochs: int = 10,
@@ -94,6 +94,8 @@ class PPO(BaseAlgorithm):
         ent_coef: float = 0.0,
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
+        lr_scheduler: Optional[th.optim.lr_scheduler._LRScheduler] = None,
+        scheduler_kwargs: Optional[Dict[str, Any]] = None,
         target_kl: Optional[float] = None,
         log_dir: Optional[pathlib.Path] = None,
         checkpoint_freq: int = 5000,
@@ -159,6 +161,8 @@ class PPO(BaseAlgorithm):
         self.clip_range_vf = clip_range_vf
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
+        self.lr_scheduler = lr_scheduler
+        self.scheduler_kwargs = {} if scheduler_kwargs is None else scheduler_kwargs
 
         if _init_setup_model:
             self._setup_model()
@@ -174,6 +178,9 @@ class PPO(BaseAlgorithm):
             **self.policy_kwargs  # pytype:disable=not-instantiable
         )
         self.policy = self.policy.to(self.device)
+
+        if self.lr_scheduler is not None:
+            self.lr_scheduler = self.lr_scheduler(self.policy.optimizer, **self.scheduler_kwargs)
 
         # Initialize schedules for policy/value clipping
         self.clip_range = get_schedule_fn(self.clip_range)
@@ -242,8 +249,6 @@ class PPO(BaseAlgorithm):
         """
         # Switch to train mode (this affects batch norm / dropout)
         self.policy.set_training_mode(True)
-        # Update optimizer learning rate
-        self._update_learning_rate(self.policy.optimizer)
         # Compute current clip range
         clip_range = self.clip_range(self._current_progress_remaining)
         # Optional: clip range for the value function
@@ -354,10 +359,14 @@ class PPO(BaseAlgorithm):
             std = self.policy.get_std(obs)
         self.logger.record("train/std", std.mean().item())
 
+        self.logger.record("train/learning_rate", self.lr_scheduler.get_last_lr())
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)
         if self.clip_range_vf is not None:
             self.logger.record("train/clip_range_vf", clip_range_vf)
+
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.step()
 
     def _setup_learn(
         self,

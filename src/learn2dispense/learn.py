@@ -3,10 +3,20 @@ import sys
 import rospy
 import pathlib
 from datetime import datetime
+from torch.optim.lr_scheduler import LambdaLR
 
 from learn2dispense.env import Environment
 from learn2dispense.policy import SimplePolicy
 from learn2dispense.ppo import PPO
+
+
+def lambda_schedule(epoch: int) -> float:
+    if epoch < 1e5:
+        return 1
+    elif epoch < 2e5:
+        return 0.25
+    else:
+        return 0.1
 
 
 if __name__ == "__main__":
@@ -23,9 +33,11 @@ if __name__ == "__main__":
             log_dir=log_dir,
             batch_size=256,
             n_steps=8192,
-            checkpoint_freq=20000
+            checkpoint_freq=20000,
+            lr_scheduler=LambdaLR,
+            scheduler_kwargs={"lr_lambda": lambda_schedule}
         )
-        model.learn(total_timesteps=1000000)
+        model.learn(total_timesteps=int(1e6))
         env.restore_initial_env_state()
 
     except rospy.ROSInterruptException:

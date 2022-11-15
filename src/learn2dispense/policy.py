@@ -113,7 +113,7 @@ class SimplePolicy(ActorCriticPolicy):
         self,
         observation_space: gym.spaces.Space,
         action_space: gym.spaces.Space,
-        lr_schedule: Schedule,
+        learning_rate: Schedule,
         activation_fn: Type[nn.Module] = nn.Tanh,
         ortho_init: bool = True,
         log_std_init: float = -0.5,
@@ -125,7 +125,7 @@ class SimplePolicy(ActorCriticPolicy):
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
-            lr_schedule=lr_schedule,
+            lr_schedule=learning_rate,
             net_arch=[dict(pi=[32, 32], vf=[64, 64])],
             activation_fn=activation_fn,
             ortho_init=ortho_init,
