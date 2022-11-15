@@ -28,7 +28,7 @@ LEARNING_MAX_VEL = MAX_ROT_VEL / 2
 
 ANGLE_LIMIT = {
     "regular": {
-        "corner": (1 / 3) * np.pi,
+        "corner": (2 / 5) * np.pi,
         "edge": (1 / 2) * np.pi
     },
     "spout": {"corner": (2 / 5) * np.pi}
@@ -114,17 +114,19 @@ class Dispenser:
 
         return last_obs
 
-    def reset_rollout(self):
+    def reset_rollout(self, has_policy: bool):
         self.rollout_data = {}
         for k in self.OBS_DATA:
             self.rollout_data[k] = []
 
         self.rollout_data["time"] = []
-        self.rollout_data["action"] = []
-        self.rollout_data["action_max_clip"] = []
-        self.rollout_data["action_min_clip"] = []
-        self.rollout_data["value"] = []
-        self.rollout_data["log_prob"] = []
+        if has_policy:
+            self.rollout_data["action"] = []
+            self.rollout_data["deter_action"] = []
+            self.rollout_data["action_max_clip"] = []
+            self.rollout_data["action_min_clip"] = []
+            self.rollout_data["value"] = []
+            self.rollout_data["log_prob"] = []
 
     def compute_rewards(self) -> np.ndarray:
         rewards = -0.1 * np.ones(len(self.rollout_data["error"]), dtype=np.float32)
@@ -133,7 +135,7 @@ class Dispenser:
 
         return rewards
 
-    def process_rollout_data(self) -> Tuple[Dict, Dict]:
+    def process_rollout_data(self, has_policy: bool) -> Tuple[Dict, Dict]:
         outputs = {}
         for k, v in self.rollout_data.items():
             if isinstance(v[0], th.Tensor):
@@ -158,21 +160,26 @@ class Dispenser:
         outputs["episode_start"] = np.zeros(len(outputs["obs"]), dtype=np.float32)
         outputs["episode_start"][0] = 1
         outputs["time"] = self.rollout_data["time"]
-        outputs["action"] = self.rollout_data["action"]
-        outputs["value"] = self.rollout_data["value"]
-        outputs["log_prob"] = self.rollout_data["log_prob"]
+        if has_policy:
+            outputs["action"] = self.rollout_data["action"]
+            outputs["value"] = self.rollout_data["value"]
+            outputs["log_prob"] = self.rollout_data["log_prob"]
+            outputs["deter_action"] = self.rollout_data["deter_action"]
+
         info = {
             "episode": {
                 "mean_reward": np.mean(outputs["reward"]),
                 "length": self.steps,
                 "return": np.sum(outputs["reward"]),
-                "dispense_time": self.dispense_time,
-                "mean_action": np.mean(outputs["action"]),
-                "action_max_clip": np.mean(self.rollout_data["action_max_clip"]),
-                "action_min_clip": np.mean(self.rollout_data["action_min_clip"])
+                "dispense_time": self.dispense_time
             },
             "is_success": self.success
         }
+
+        if has_policy:
+            info["episode"]["mean_action"] = np.mean(outputs["action"])
+            info["episode"]["action_max_clip"] = np.mean(self.rollout_data["action_max_clip"])
+            info["episode"]["action_min_clip"] = np.mean(self.rollout_data["action_min_clip"])
 
         return outputs, info
 
@@ -181,6 +188,7 @@ class Dispenser:
         ingredient_params: dict,
         target_wt: float,
         policy: Optional[BasePolicy] = None,
+        eval_mode: bool = False,
         ingredient_wt_start: Optional[float] = None,
     ) -> Tuple[bool, float, Dict, Dict]:
         # Record current robot position
@@ -211,7 +219,7 @@ class Dispenser:
 
         # set run-specific params
         self.rate.sleep()
-        self.reset_rollout()
+        self.reset_rollout(policy is not None)
         self.start_wt = self.get_weight()
         self.last_vel = 0
         self.last_acc = 0
@@ -220,7 +228,12 @@ class Dispenser:
         rospy.loginfo("Dispensing started...")
         self.angle_limit = ANGLE_LIMIT[self.lid_type][ingredient_params["pouring_position"]]
         start_time = time.time()
-        self.run_pd_control(target_wt, self.ctrl_params["error_threshold"], policy)
+        self.run_pd_control(
+            target_wt=target_wt,
+            err_threshold=self.ctrl_params["error_threshold"],
+            policy=policy,
+            eval_mode=eval_mode
+        )
         self.dispense_time = time.time() - start_time
 
         # Move to dispense-start position
@@ -246,7 +259,7 @@ class Dispenser:
             rospy.loginfo(f"Dispensed Wt: {dispensed_wt:0.2f} g")
             self.success = True
 
-        rollout_data, info = self.process_rollout_data()
+        rollout_data, info = self.process_rollout_data(policy is not None)
 
         return True, dispensed_wt, rollout_data, info
 
@@ -271,7 +284,13 @@ class Dispenser:
             self.rate.sleep()
             last_velocity = curr_velocity
 
-    def run_pd_control(self, target_wt: float, err_threshold: float, policy: BasePolicy):
+    def run_pd_control(
+        self,
+        target_wt: float,
+        err_threshold: float,
+        policy: Optional[BasePolicy] = None,
+        eval_mode: bool = False
+    ):
         """
         Run the PD controller
         """
@@ -292,7 +311,6 @@ class Dispenser:
             wt_fb_acc.append(curr_wt)
             if not is_recent:
                 rospy.logerr("Weight feedback from weighing scale is too delayed. Stopping dispensing process.")
-                success = False
                 break
 
             error = target_wt - (curr_wt - self.start_wt)
@@ -322,7 +340,6 @@ class Dispenser:
 
             if np.abs(angle) >= self.angle_limit:
                 rospy.logerr("Container does not seem to have sufficient ingredient quantity...")
-                success = False
                 break
 
             self.rollout_data["error"].append(error)
@@ -339,7 +356,7 @@ class Dispenser:
                 with th.no_grad():
                     obs = self.get_last_state()
                     obs_tensor = obs_as_tensor(obs, policy.device).view(1, -1)
-                    action, value, log_prob = policy(obs_tensor)
+                    action, value, log_prob, deter_action = policy(obs_tensor, deterministic=eval_mode)
                 action = action.cpu().item()
 
                 unclipped_total_vel += (LEARNING_MAX_VEL * action)
@@ -348,19 +365,20 @@ class Dispenser:
             self.run_control_loop(total_vel)
 
             self.rollout_data["time"].append(curr_time)
-            self.rollout_data["action"].append(action)
-            self.rollout_data["action_max_clip"].append(unclipped_total_vel > max_vel)
-            self.rollout_data["action_min_clip"].append(unclipped_total_vel < min_vel)
-            self.rollout_data["value"].append(value.squeeze())
-            self.rollout_data["log_prob"].append(log_prob.squeeze())
+            if policy is not None:
+                self.rollout_data["action"].append(action)
+                self.rollout_data["deter_action"].append(deter_action.cpu().item())
+                self.rollout_data["action_max_clip"].append(unclipped_total_vel > max_vel)
+                self.rollout_data["action_min_clip"].append(unclipped_total_vel < min_vel)
+                self.rollout_data["value"].append(value.squeeze())
+                self.rollout_data["log_prob"].append(log_prob.squeeze())
             self.steps += 1
 
             self.last_acc = (total_vel - self.last_vel) / T_STEP
             self.last_vel = total_vel
 
-            if curr_time > 150:
+            if policy is not None and curr_time > 150:
                 rospy.logerr("Robot possibly stuck in a jitter. Stopping dispensing...")
-                success = False
                 break
 
         self.min_rot_vel = min(2 * MIN_ROT_VEL, self.min_rot_vel)
@@ -387,5 +405,3 @@ class Dispenser:
             self.run_control_loop(vel)
             self.last_acc = (vel - self.last_vel) / T_STEP
             self.last_vel = vel
-
-        return success

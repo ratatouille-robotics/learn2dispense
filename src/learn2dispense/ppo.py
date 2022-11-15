@@ -94,7 +94,7 @@ class PPO(BaseAlgorithm):
         ent_coef: float = 0.0,
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
-        lr_scheduler: Optional[th.optim.lr_scheduler._LRScheduler] = None,
+        lr_scheduler_cls: Optional[th.optim.lr_scheduler._LRScheduler] = None,
         scheduler_kwargs: Optional[Dict[str, Any]] = None,
         target_kl: Optional[float] = None,
         log_dir: Optional[pathlib.Path] = None,
@@ -161,7 +161,7 @@ class PPO(BaseAlgorithm):
         self.clip_range_vf = clip_range_vf
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
-        self.lr_scheduler = lr_scheduler
+        self.lr_scheduler_cls = lr_scheduler_cls
         self.scheduler_kwargs = {} if scheduler_kwargs is None else scheduler_kwargs
 
         if _init_setup_model:
@@ -180,7 +180,9 @@ class PPO(BaseAlgorithm):
         self.policy = self.policy.to(self.device)
 
         if self.lr_scheduler is not None:
-            self.lr_scheduler = self.lr_scheduler(self.policy.optimizer, **self.scheduler_kwargs)
+            self.lr_scheduler = self.lr_scheduler_cls(self.policy.optimizer, **self.scheduler_kwargs)
+        else:
+            self.lr_scheduler = None
 
         # Initialize schedules for policy/value clipping
         self.clip_range = get_schedule_fn(self.clip_range)

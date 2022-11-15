@@ -32,7 +32,7 @@ class Environment:
 
     MIN_DISPENSE_WEIGHT = 10
     MAX_DISPENSE_WEIGHT = 100
-    REFILL_THRESHOLD = 10
+    REFILL_THRESHOLD = 25
     ALMOST_CLOSED_STATE = 155
     EMPTY_CONTAINER_WEIGHT = 116.5
     TAG_ID = 15
@@ -53,6 +53,7 @@ class Environment:
         self._pre_process()
         self.num_episodes = 0
         self.num_batches = 0
+        self.mode = "train"
 
         if self.log_rollout:
             if not os.path.exists(log_dir / "rollout_data"):
@@ -92,6 +93,10 @@ class Environment:
         quat = R.from_matrix(matrix[:3, :3]).as_quat().tolist()
 
         return make_pose(pos, quat)
+
+    def set_mode(self, mode: str):
+        assert mode in ["train", "test"]
+        self.mode = mode
 
     def compute_pick_pose(self, prior_pose: Optional[Pose] = None) -> Pose:
         rospy.sleep(1)
@@ -201,16 +206,26 @@ class Environment:
     def sample_weight(self) -> float:
         return np.random.uniform(self.MIN_DISPENSE_WEIGHT, min(self.MAX_DISPENSE_WEIGHT, self.available_weight))
 
-    def interact(self, total_steps: int = None, policy: Optional[BasePolicy] = None) -> Tuple[Dict, List]:
+    def interact(
+        self,
+        total_steps: int = None,
+        total_episodes: int = None,
+        policy: Optional[BasePolicy] = None,
+        eval_mode: bool = False
+    ) -> Tuple[Dict, List]:
         """
         Will dispense for the requested timesteps and returns the requested data
         """
+        assert total_steps is None or total_episodes is None
         data = {}
         infos = []
         current_steps = 0
+        current_episodes = 0
         self.num_batches += 1
 
-        while current_steps < total_steps:
+        while (total_steps is None or current_steps < total_steps) and (
+            total_episodes is None or current_episodes < total_episodes
+        ):
             if self.available_weight < self.REFILL_THRESHOLD:
                 rospy.loginfo(f"Container is empty. Reset sequence initiated.")
                 self.reset_containers()
@@ -223,6 +238,7 @@ class Environment:
                 ingredient_params=self.ingredient_params,
                 target_wt=target_wt,
                 policy=policy,
+                eval_mode=eval_mode,
                 ingredient_wt_start=self.available_weight
             )
             self.available_weight -= max(0, dispensed_wt)
@@ -231,19 +247,22 @@ class Environment:
             if completed:
                 self.num_episodes += 1
                 current_steps += len(rollout_data["obs"])
+                current_episodes += 1
                 infos.append(info)
 
-                for k, v in rollout_data.items():
-                    if k in data:
-                        data[k].append(v)
-                    else:
-                        data[k] = [v]
+                if self.mode == "train":
+                    for k, v in rollout_data.items():
+                        if k in data:
+                            data[k].append(v)
+                        else:
+                            data[k] = [v]
 
-        for k, v in data.items():
-            if (isinstance(v[0], np.ndarray)):
-                data[k] = np.concatenate(v, axis=0)
-            else:
-                data[k] = torch.cat(v, dim=0)
+        if self.mode == "train":
+            for k, v in data.items():
+                if (isinstance(v[0], np.ndarray)):
+                    data[k] = np.concatenate(v, axis=0)
+                else:
+                    data[k] = torch.cat(v, dim=0)
 
         if self.log_rollout:
             data_copy = {}

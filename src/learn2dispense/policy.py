@@ -45,7 +45,7 @@ class SquashedGaussianDistribution(Distribution):
         mean_actions = nn.Linear(latent_dim, self.action_dim)
 
         if self.use_state_dependent_std:
-            std_model = nn.Linear(latent_dim, 1)
+            std_model = nn.Linear(latent_dim, self.action_dim)
             std_model.bias.data = th.ones_like(std_model.bias.data) * std_param_init
         else:
             std_model = nn.Parameter(th.ones(self.action_dim) * std_param_init, requires_grad=True)
@@ -84,7 +84,7 @@ class SquashedGaussianDistribution(Distribution):
         return self.distribution.rsample()
 
     def mode(self) -> th.Tensor:
-        return self.distribution.mean
+        return th.tanh(self.distribution.base_dist.mean)
 
     def actions_from_params(
         self, mean_actions: th.Tensor, unnormalized_std: th.Tensor, deterministic: bool = False
@@ -116,7 +116,7 @@ class SimplePolicy(ActorCriticPolicy):
         learning_rate: Schedule,
         activation_fn: Type[nn.Module] = nn.Tanh,
         ortho_init: bool = True,
-        log_std_init: float = -0.5,
+        log_std_init: float = -0.75,
         use_state_dependent_std: bool = True,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
@@ -205,3 +205,22 @@ class SimplePolicy(ActorCriticPolicy):
             unnormalized_std = self.std_model
 
         return softplus(unnormalized_std)
+
+    def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+        """
+        Forward pass in all the networks (actor and critic)
+
+        :param obs: Observation
+        :param deterministic: Whether to sample or use deterministic actions
+        :return: action, value, log probability and mean of the action
+        """
+        # Preprocess the observation if needed
+        features = self.extract_features(obs)
+        latent_pi, latent_vf = self.mlp_extractor(features)
+        # Evaluate the values for the given observations
+        values = self.value_net(latent_vf)
+        distribution = self._get_action_dist_from_latent(latent_pi)
+        actions = distribution.get_actions(deterministic=deterministic)
+        log_prob = distribution.log_prob(actions)
+        actions = actions.reshape((-1,) + self.action_space.shape)
+        return actions, values, log_prob, distribution.mode()
