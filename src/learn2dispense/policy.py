@@ -46,7 +46,7 @@ class SquashedGaussianDistribution(Distribution):
 
         if self.use_state_dependent_std:
             std_model = nn.Linear(latent_dim, 1)
-            std_model.bias.data = np.ones_like(std_model.bias.data) * std_param_init
+            std_model.bias.data = th.ones_like(std_model.bias.data) * std_param_init
         else:
             std_model = nn.Parameter(th.ones(self.action_dim) * std_param_init, requires_grad=True)
 
@@ -122,6 +122,7 @@ class SimplePolicy(ActorCriticPolicy):
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
 
+        self.use_state_dependent_std = use_state_dependent_std
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
@@ -136,8 +137,6 @@ class SimplePolicy(ActorCriticPolicy):
             optimizer_class=optimizer_class,
             optimizer_kwargs=optimizer_kwargs,
         )
-
-        self.use_state_dependent_std = use_state_dependent_std
 
     def _build(self, lr_schedule: Schedule) -> None:
         """

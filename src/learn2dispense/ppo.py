@@ -354,12 +354,12 @@ class PPO(BaseAlgorithm):
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
-        obs = self.rollout_buffer.get(len(self.rollout_buffer))
+        obs = next(self.rollout_buffer.get(self.rollout_buffer.buffer_size)).observations
         with th.no_grad():
             std = self.policy.get_std(obs)
         self.logger.record("train/std", std.mean().item())
 
-        self.logger.record("train/learning_rate", self.lr_scheduler.get_last_lr())
+        self.logger.record("train/learning_rate", self.lr_scheduler.get_last_lr()[0])
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)
         if self.clip_range_vf is not None:
