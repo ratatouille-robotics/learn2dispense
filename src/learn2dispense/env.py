@@ -210,30 +210,44 @@ class Environment:
         self,
         total_steps: int = None,
         total_episodes: int = None,
+        episode_list: Optional[List[float]] = None,
         policy: Optional[BasePolicy] = None,
         eval_mode: bool = False
     ) -> Tuple[Dict, List]:
         """
         Will dispense for the requested timesteps and returns the requested data
         """
+        assert total_steps is not None or total_episodes is not None or episode_list is not None
         assert total_steps is None or total_episodes is None
         data = {}
         infos = []
-        current_steps = 0
-        current_episodes = 0
+        current_step = 0
+        current_episode = 0
         self.num_batches += 1
 
-        while (total_steps is None or current_steps < total_steps) and (
-            total_episodes is None or current_episodes < total_episodes
+        if episode_list is not None:
+            total_episodes = len(episode_list)
+
+        while (total_steps is None or current_step < total_steps) and (
+            total_episodes is None or current_episode < total_episodes
         ):
-            if self.available_weight < self.REFILL_THRESHOLD:
+            if (episode_list is not None and self.available_weight < episode_list[current_episode]
+            ) or self.available_weight < self.REFILL_THRESHOLD:
                 rospy.loginfo(f"Container is empty. Reset sequence initiated.")
                 self.reset_containers()
                 continue
 
-            # Proceed with dispensing
-            target_wt = self.sample_weight()
-            rospy.loginfo(f"[{current_steps}/{total_steps}]:\t Requested Wt: {target_wt:0.4f} g")
+            # Decide how much weight to request for current episode
+            if episode_list is None:
+                target_wt = self.sample_weight()
+            else:
+                target_wt = episode_list[current_episode]
+
+            if total_episodes is None:
+                rospy.loginfo(f"[{current_step}/{total_steps}]:\t Requested Wt: {target_wt:0.4f} g")
+            else:
+                rospy.loginfo(f"[{current_episode}/{total_episodes}]:\t Requested Wt: {target_wt:0.4f} g")
+            
             completed, dispensed_wt, rollout_data, info = self.dispenser.dispense_ingredient(
                 ingredient_params=self.ingredient_params,
                 target_wt=target_wt,
@@ -246,8 +260,8 @@ class Environment:
 
             if completed:
                 self.num_episodes += 1
-                current_steps += len(rollout_data["obs"])
-                current_episodes += 1
+                current_step += len(rollout_data["obs"])
+                current_episode += 1
                 infos.append(info)
 
                 if self.mode == "train":
