@@ -129,7 +129,7 @@ class Dispenser:
     def compute_rewards(self) -> np.ndarray:
         rewards = -0.1 * np.ones(len(self.rollout_data["error"]), dtype=np.float32)
         if not self.success:
-            rewards[-1] = -20
+            rewards[-5:] = -10
 
         return rewards
 
@@ -349,8 +349,8 @@ class Dispenser:
 
             self.rollout_data["time"].append(curr_time)
             self.rollout_data["action"].append(action)
-            self.rollout_data["action_max_clip"].append(max(unclipped_total_vel - max_vel, 0))
-            self.rollout_data["action_min_clip"].append(max(min_vel - unclipped_total_vel, 0))
+            self.rollout_data["action_max_clip"].append(unclipped_total_vel > max_vel)
+            self.rollout_data["action_min_clip"].append(unclipped_total_vel < min_vel)
             self.rollout_data["value"].append(value.squeeze())
             self.rollout_data["log_prob"].append(log_prob.squeeze())
             self.steps += 1
