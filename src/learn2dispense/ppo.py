@@ -179,7 +179,7 @@ class PPO(BaseAlgorithm):
         )
         self.policy = self.policy.to(self.device)
 
-        if self.lr_scheduler is not None:
+        if self.lr_scheduler_cls is not None:
             self.lr_scheduler = self.lr_scheduler_cls(self.policy.optimizer, **self.scheduler_kwargs)
         else:
             self.lr_scheduler = None
@@ -214,7 +214,10 @@ class PPO(BaseAlgorithm):
         
         self.policy.set_training_mode(False)
 
-        rollout_data, infos = self.env.interact(n_rollout_steps, self.policy)
+        rollout_data, infos = self.env.interact(
+            total_steps=n_rollout_steps,
+            policy=self.policy
+        )
         self.num_timesteps += len(rollout_data["obs"])
         self.num_episodes += np.sum(rollout_data["episode_start"])
         self._update_info_buffer(infos)

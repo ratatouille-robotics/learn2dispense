@@ -133,7 +133,7 @@ class Dispenser:
         e_dt_pentaly = (self.rollout_data["error_rate"] / 200) ** 2
         rewards = -(e_penalty + e_dt_pentaly)
         if not self.success:
-            rewards[-5:] *= 10
+            rewards[-10:] *= 10
 
         return rewards
 

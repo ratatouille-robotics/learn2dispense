@@ -34,7 +34,7 @@ if __name__ == "__main__":
             batch_size=256,
             n_steps=8192,
             checkpoint_freq=20000,
-            lr_scheduler=LambdaLR,
+            lr_scheduler_cls=LambdaLR,
             scheduler_kwargs={"lr_lambda": lambda_schedule}
         )
         model.learn(total_timesteps=int(1e6))
