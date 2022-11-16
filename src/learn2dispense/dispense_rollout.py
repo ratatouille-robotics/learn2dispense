@@ -129,9 +129,11 @@ class Dispenser:
             self.rollout_data["log_prob"] = []
 
     def compute_rewards(self) -> np.ndarray:
-        rewards = -0.1 * np.ones(len(self.rollout_data["error"]), dtype=np.float32)
+        e_penalty = (self.rollout_data["error"] / 200) ** 2
+        e_dt_pentaly = (self.rollout_data["error_rate"] / 200) ** 2
+        rewards = -(e_penalty + e_dt_pentaly)
         if not self.success:
-            rewards[-5:] = -10
+            rewards[-5:] *= 10
 
         return rewards
 
