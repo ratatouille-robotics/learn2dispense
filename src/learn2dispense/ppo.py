@@ -1,6 +1,7 @@
 import sys
 import io
 import time
+import rospy
 import pathlib
 import warnings
 from collections import deque
@@ -457,15 +458,20 @@ class PPO(BaseAlgorithm):
             if curr_mean_return > max_mean_return:
                 max_mean_return = curr_mean_return
                 self.env.reset()
+                rospy.loginfo("New checkpoint with high return. Evaluating the model...")
                 _, infos = self.env.interact(
                     episode_list=[17, 24, 83, 66, 72, 87, 42, 95, 33, 58],
                     policy=self.policy,
                     eval_mode=True,
                 )
-
+                rospy.loginfo("Evaluation complete...")
                 self.save(self.log_dir / f"model/best_iter_{iteration}")
-                for k in infos[0].keys():
-                    self.logger.record(f"test/ep_{k}", safe_mean([ep_info[k] for ep_info in infos]))
+                
+                ep_info_buffer = [item['episode'] for item in infos]
+                ep_success_buffer = [item['is_success'] for item in infos]
+                for k in ep_info_buffer[0].keys():
+                    self.logger.record(f"test/{k}", safe_mean([ep_info[k] for ep_info in ep_info_buffer]))
+                self.logger.record("test/success_ratio", safe_mean(ep_success_buffer))
 
             self.train()
 
@@ -488,7 +494,7 @@ class PPO(BaseAlgorithm):
 
             if ((self.num_timesteps // self.checkpoint_freq > checkpoints) or self.num_timesteps > total_timesteps):
                 checkpoints += 1
-                self.save(self.log_dir / f"model/ckpt_{checkpoints}")
+                self.save(self.log_dir / f"model/iter_{iteration}")
 
             self.logger.dump(step=self.num_timesteps)
 

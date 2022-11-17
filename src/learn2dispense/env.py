@@ -191,14 +191,10 @@ class Environment:
         assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=True)
 
     def reset(self):
-        rospy.loginfo("Ignore next few error logs. Dispensing code being used to empty containers...")
-        _ = self.dispenser.dispense_ingredient(
-                ingredient_params=self.ingredient_params,
-                target_wt=self.available_weight + 10,
-                eval_mode=True,
-                ingredient_wt_start=self.available_weight
-            )
+        rospy.loginfo("Resetting environment by emptying containers...")
+        self.dispenser.run_reset_control(ingredient_params=self.ingredient_params)
         self.reset_containers()
+        rospy.loginfo("Resetting complete...")
 
     def reset_containers(self):
         self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)

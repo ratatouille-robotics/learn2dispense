@@ -55,7 +55,6 @@ POURING_POSES = {
 
 class Dispenser:
 
-    # TODO: Add angle, fill-level
     OBS_DATA = ["error", "error_rate", "velocity", "acceleration", "pid_output", "angle_fb"]
     OBS_HIST_LENGTH = [5, 5, 1, 1, 1, 1]
     OBS_MEAN = [50, -25, 0, 0, 0, (np.pi / 6)]
@@ -129,8 +128,9 @@ class Dispenser:
 
     def compute_rewards(self) -> np.ndarray:
         e_penalty = (self.rollout_data["error"] / 200) ** 2
-        e_dt_pentaly = (self.rollout_data["error_rate"] / 200) ** 2
-        rewards = -(e_penalty + e_dt_pentaly)
+        e_dt_penalty = (self.rollout_data["error_rate"] / 200) ** 2
+        closeness_factor = np.maximum(0, 50 - self.rollout_data["error"]) / 50
+        rewards = -(e_penalty + (1 + 10 * pow(closeness_factor, 2)) * e_dt_penalty)
         if not self.success:
             rewards[-10:] *= 10
 
@@ -183,6 +183,75 @@ class Dispenser:
             info["episode"]["action_min_clip"] = np.mean(self.rollout_data["action_min_clip"])
 
         return outputs, info
+
+    def run_reset_control(self, ingredient_params: dict,):
+        # Record current robot position
+        robot_original_pose = self.robot_mg.get_current_pose()
+        # Send dummy velocity to avoid delayed motion start on first run
+        self.robot_mg.send_cartesian_vel_trajectory(T.numpy2twist(np.zeros(6, dtype=np.float)))
+
+        # Set ingredient-specific params
+        self.ctrl_params = ingredient_params["controller"]
+        self.lid_type = ingredient_params["container"]["lid"]
+        if self.lid_type in ["none", "slot"]:
+            self.lid_type = "regular"
+        self.container_offset = CONTAINER_OFFSET[self.lid_type]
+
+        # Set ingredient-specific limits
+        self.max_rot_vel = 0.5 * self.ctrl_params["vel_scaling"] * MAX_ROT_VEL
+        self.min_rot_vel = 0.5 * self.ctrl_params["vel_scaling"] * MIN_ROT_VEL
+        self.max_rot_acc = self.ctrl_params["acc_scaling"] * MAX_ROT_ACC
+        self.min_rot_acc = self.ctrl_params["acc_scaling"] * MIN_ROT_ACC
+
+        # Move to dispense-start position
+        pos, orient = POURING_POSES[self.lid_type][ingredient_params["pouring_position"]]
+        pre_dispense_pose = make_pose(pos, orient)
+        assert self.robot_mg.go_to_pose_goal(
+            pre_dispense_pose, cartesian_path=True, orient_tolerance=0.05, velocity_scaling=0.75, acc_scaling=0.5
+        )
+
+        # set run-specific params
+        self.rate.sleep()
+        self.last_vel = 0
+        self.last_acc = 0
+
+        self.angle_limit = ANGLE_LIMIT[self.lid_type][ingredient_params["pouring_position"]]
+        start_T = T.pose2matrix(self.robot_mg.get_current_pose())
+        curr_pose = self.robot_mg.get_current_pose()
+        angle, axis = get_rotation(start_T, T.pose2matrix(curr_pose))
+        self.base_raw_twist = np.array([0, 0, 0] + self.ctrl_params["rot_axis"], dtype=np.float)
+
+        while angle < self.angle_limit:
+            # Clamp velocity based on acceleration and velocity limits
+            max_vel = self.last_vel + MAX_ROT_ACC * T_STEP
+            valid_vel = np.clip(max_vel, self.min_rot_vel, self.max_rot_vel)
+
+            # Check if the angluar limits about the pouring axis have been reached
+            curr_pose = self.robot_mg.get_current_pose()
+            angle, axis = get_rotation(start_T, T.pose2matrix(curr_pose))
+            if np.sum(axis * self.base_raw_twist[-3:]) < 0:
+                angle *= -1
+
+            self.run_control_loop(valid_vel)
+
+            self.last_acc = (valid_vel - self.last_vel) / T_STEP
+            self.last_vel = valid_vel
+
+        self.retract(start_T)
+
+        # Move to dispense-start position
+        assert self.robot_mg.go_to_pose_goal(
+            pre_dispense_pose,
+            cartesian_path=True,
+            velocity_scaling=0.5,
+            acc_scaling=0.25
+        )
+        assert self.robot_mg.go_to_pose_goal(
+            robot_original_pose,
+            cartesian_path=True,
+            velocity_scaling=0.75,
+            acc_scaling=0.5
+        )
 
     def dispense_ingredient(
         self,
@@ -301,7 +370,6 @@ class Dispenser:
         error = target_wt
         wt_fb_acc = deque(maxlen=int(DERIVATIVE_WINDOW / T_STEP) + 1)
         self.base_raw_twist = np.array([0, 0, 0] + self.ctrl_params["rot_axis"], dtype=np.float)
-        success = True
         start_time = time.time()
         self.steps = 0
 
@@ -382,11 +450,12 @@ class Dispenser:
                 rospy.logerr("Robot possibly stuck in a jitter. Stopping dispensing...")
                 break
 
+        self.retract(start_T)
+
+    def retract(self, start_T):
         self.min_rot_vel = min(2 * MIN_ROT_VEL, self.min_rot_vel)
         # Retract the container to the starting position
         while True:
-            curr_wt = self.get_weight()
-
             curr_pose = self.robot_mg.get_current_pose()
             ang, ax = get_rotation(start_T, T.pose2matrix(curr_pose))
             ang = np.sign(np.dot(ax, self.ctrl_params["rot_axis"])) * ang
