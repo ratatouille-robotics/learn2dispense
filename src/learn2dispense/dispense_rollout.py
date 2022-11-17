@@ -127,12 +127,15 @@ class Dispenser:
             self.rollout_data["log_prob"] = []
 
     def compute_rewards(self) -> np.ndarray:
-        e_penalty = (self.rollout_data["error"] / 200) ** 2
-        e_dt_penalty = (self.rollout_data["error_rate"] / 200) ** 2
-        closeness_factor = np.maximum(0, 50 - self.rollout_data["error"]) / 50
-        rewards = -(e_penalty + (1 + 10 * pow(closeness_factor, 2)) * e_dt_penalty)
+        closeness_factor = np.maximum(0, 25 - self.rollout_data["error"]) / 25
+        normalized_flow_rate = -np.maximum(np.minimum(0, self.rollout_data["error_rate"]), -50) / 50
+        t_penalty = 0.1 * np.ones_like(self.rollout_data["error"])
+        q_penalty = closeness_factor * pow(normalized_flow_rate, 2)
         if not self.success:
-            rewards[-10:] *= 10
+            q_penalty[-20:] *= 10
+            max_penalty_t = np.argmax(q_penalty[-10:])
+            q_penalty[-10 + max_penalty_t:] = q_penalty[-10 + max_penalty_t]
+        rewards = -(t_penalty + q_penalty)
 
         return rewards
 
