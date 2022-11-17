@@ -364,7 +364,6 @@ class PPO(BaseAlgorithm):
             std = self.policy.get_std(obs)
         self.logger.record("train/std", std.mean().item())
 
-        self.logger.record("train/learning_rate", self.lr_scheduler.get_last_lr()[0])
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)
         if self.clip_range_vf is not None:
@@ -372,6 +371,7 @@ class PPO(BaseAlgorithm):
 
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
+            self.logger.record("train/learning_rate", self.lr_scheduler.get_last_lr()[0])
 
     def _setup_learn(
         self,
@@ -434,6 +434,7 @@ class PPO(BaseAlgorithm):
 
         iteration = 0
         checkpoints = 0
+        max_mean_return = None
 
         total_timesteps = self._setup_learn(
             total_timesteps,
@@ -448,6 +449,23 @@ class PPO(BaseAlgorithm):
 
             iteration += 1
             self._update_current_progress_remaining(self.num_timesteps, total_timesteps)
+
+            curr_mean_return = safe_mean([ep_info["return"] for ep_info in self.ep_info_buffer])
+            if max_mean_return is None:
+                max_mean_return = curr_mean_return
+
+            if curr_mean_return > max_mean_return:
+                max_mean_return = curr_mean_return
+                self.env.reset()
+                _, infos = self.env.interact(
+                    episode_list=[17, 24, 83, 66, 72, 87, 42, 95, 33, 58],
+                    policy=self.policy,
+                    eval_mode=True,
+                )
+
+                self.save(self.log_dir / f"model/best_iter_{iteration}")
+                for k in infos[0].keys():
+                    self.logger.record(f"test/ep_{k}", safe_mean([ep_info[k] for ep_info in infos]))
 
             self.train()
 
@@ -467,11 +485,12 @@ class PPO(BaseAlgorithm):
             self.logger.record("time/time_elapsed", int(time_elapsed))
             self.logger.record("time/total_timesteps", self.num_timesteps)
             self.logger.record("time/total_episodes", self.num_episodes)
-            self.logger.dump(step=self.num_timesteps)
 
             if ((self.num_timesteps // self.checkpoint_freq > checkpoints) or self.num_timesteps > total_timesteps):
                 checkpoints += 1
                 self.save(self.log_dir / f"model/ckpt_{checkpoints}")
+
+            self.logger.dump(step=self.num_timesteps)
 
         return self
 

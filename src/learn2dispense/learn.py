@@ -11,9 +11,9 @@ from learn2dispense.ppo import PPO
 
 
 def lambda_schedule(epoch: int) -> float:
-    if epoch < 1e5:
+    if epoch < 15:
         return 1
-    elif epoch < 2e5:
+    elif epoch < 25:
         return 0.25
     else:
         return 0.1

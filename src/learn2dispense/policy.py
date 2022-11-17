@@ -46,6 +46,7 @@ class SquashedGaussianDistribution(Distribution):
 
         if self.use_state_dependent_std:
             std_model = nn.Linear(latent_dim, self.action_dim)
+            std_model.weight.data = 0.1 * std_model.weight.data
             std_model.bias.data = th.ones_like(std_model.bias.data) * std_param_init
         else:
             std_model = nn.Parameter(th.ones(self.action_dim) * std_param_init, requires_grad=True)
@@ -172,8 +173,6 @@ class SimplePolicy(ActorCriticPolicy):
                 self.action_net: 0.01,
                 self.value_net: 1,
             }
-            if self.use_state_dependent_std:
-                module_gains[self.std_model] = 0.01
 
             for module, gain in module_gains.items():
                 module.apply(partial(self.init_weights, gain=gain))

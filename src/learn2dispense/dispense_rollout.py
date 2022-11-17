@@ -100,11 +100,10 @@ class Dispenser:
             reqd_size = self.OBS_HIST_LENGTH[i]
             
             t = 1
-            while(reqd_size > 0 and avail_size > 0):
+            while(reqd_size > 0 and t <= avail_size):
                 last_obs.append((self.rollout_data[obs_var][-t] - self.OBS_MEAN[i]) / self.OBS_STD[i])
-                reqd_size -= 1
-                avail_size -= 1
                 t += 1
+                reqd_size -= 1
 
             while(reqd_size > 0):
                 last_obs.append((self.rollout_data[obs_var][0] - self.OBS_MEAN[i]) / self.OBS_STD[i])

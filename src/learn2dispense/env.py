@@ -190,6 +190,16 @@ class Environment:
         assert self.robot_mg.go_to_pose_goal(offset_pose(self.CONTAINER_SCALE_POSE, [0.01, 0, 0.15]))
         assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=True)
 
+    def reset(self):
+        rospy.loginfo("Ignore next few error logs. Dispensing code being used to empty containers...")
+        _ = self.dispenser.dispense_ingredient(
+                ingredient_params=self.ingredient_params,
+                target_wt=self.available_weight + 10,
+                eval_mode=True,
+                ingredient_wt_start=self.available_weight
+            )
+        self.reset_containers()
+
     def reset_containers(self):
         self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
         self.pick_container_from_scale()
