@@ -97,10 +97,6 @@ class Environment:
 
         return make_pose(pos, quat)
 
-    def set_mode(self, mode: str):
-        assert mode in ["train", "test"]
-        self.mode = mode
-
     def compute_pick_pose(self, prior_pose: Optional[Pose] = None) -> Pose:
         rospy.sleep(1)
         trans, quat = self.tf_listener.lookupTransform("base_link", f"ar_marker_{self.TAG_ID}", rospy.Time(0))
@@ -286,18 +282,19 @@ class Environment:
                 data[k] = torch.cat(v, dim=0)
 
         if self.log_rollout:
+            mode = "test" if eval_mode else "train"
             data_copy = {}
             for k, v in data.items():
                 data_copy[k] = v.cpu().numpy() if isinstance(v, torch.Tensor) else v
             
-            with open(self.log_dir / "rollout_data" / f"{self.mode}_batch_{self.num_batches}", "wb") as f:
+            with open(self.log_dir / "rollout_data" / f"{mode}_batch_{self.num_batches}", "wb") as f:
                 pickle.dump(data_copy, f)
 
             infos_copy = {}
             for k in infos[0].keys():
                 infos_copy[k] = [i[k] for i in infos]
 
-            with open(self.log_dir / "rollout_data" / f"{self.mode}_batch_{self.num_batches}_info", "wb") as f:
+            with open(self.log_dir / "rollout_data" / f"{mode}_batch_{self.num_batches}_info", "wb") as f:
                 pickle.dump(infos_copy, f)
 
         return data, infos
