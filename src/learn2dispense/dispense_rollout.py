@@ -175,7 +175,9 @@ class Dispenser:
                 "mean_reward": np.mean(outputs["reward"]),
                 "length": self.steps,
                 "return": np.sum(outputs["reward"]),
-                "dispense_time": self.dispense_time
+                "dispense_time": self.dispense_time,
+                "requested_wt": self.requested_wt,
+                "dispensed_wt": self.dispensed_wt,
             },
             "is_success": self.success
         }
@@ -296,6 +298,8 @@ class Dispenser:
         self.start_wt = self.get_weight()
         self.last_vel = 0
         self.last_acc = 0
+        self.dispensed_wt = 0
+        self.requested_wt = target_wt
 
         # Dispense ingredient
         rospy.loginfo("Dispensing started...")
@@ -319,22 +323,22 @@ class Dispenser:
         )
 
         self.success = False
-        dispensed_wt = self.get_weight() - self.start_wt
-        if (target_wt - dispensed_wt) > ingredient_params["tolerance"]:
+        self.dispensed_wt = self.get_weight() - self.start_wt
+        if (target_wt - self.dispensed_wt) > ingredient_params["tolerance"]:
             rospy.logerr(f"Dispensed amount is below tolerance...")
-            rospy.logerr(f"Dispensed Wt: {dispensed_wt:0.2f}g")
-            return False, dispensed_wt, None, None
-        elif (dispensed_wt - target_wt) > ingredient_params["tolerance"]:
+            rospy.logerr(f"Dispensed Wt: {self.dispensed_wt:0.2f}g")
+            return False, self.dispensed_wt, None, None
+        elif (self.dispensed_wt - target_wt) > ingredient_params["tolerance"]:
             rospy.logerr(f"Dispensed amount exceeded the tolerance...")
-            rospy.logerr(f"Dispensed Wt: {dispensed_wt:0.2f}g")
+            rospy.logerr(f"Dispensed Wt: {self.dispensed_wt:0.2f}g")
         else:
             rospy.loginfo(f"Ingredient dispensed successfuly...")
-            rospy.loginfo(f"Dispensed Wt: {dispensed_wt:0.2f} g")
+            rospy.loginfo(f"Dispensed Wt: {self.dispensed_wt:0.2f} g")
             self.success = True
 
         rollout_data, info = self.process_rollout_data(policy is not None)
 
-        return True, dispensed_wt, rollout_data, info
+        return True, self.dispensed_wt, rollout_data, info
 
     def run_control_loop(self, velocity):
         last_velocity = self.last_vel

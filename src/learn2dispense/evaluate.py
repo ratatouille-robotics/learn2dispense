@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+import sys
+import rospy
+import pathlib
+
+from learn2dispense.env import Environment
+from learn2dispense.ppo import PPO
+
+
+LOG_DIR = pathlib.Path(__file__).parent.parent.parent / "eval_logs/baseline"
+MODEL_PATH = pathlib.Path(__file__).parent.parent.parent / "logs/learn_dispense_v4/model/best_iter_27"
+AVAILABLE_WT = 1097.5
+
+
+if __name__ == "__main__":
+    try:
+        rospy.init_node("evaluate_dispense")
+
+        env = Environment(
+            log_dir=LOG_DIR,
+            log_rollout=True,
+            use_fill_level=True,
+            available_weight=AVAILABLE_WT
+        )
+
+        model = PPO.load(
+            path=MODEL_PATH,
+            env=env
+        )
+
+        data, info = env.interact(
+            episode_list=[17, 24, 83, 66, 72, 87, 42, 95, 33, 58],
+            policy=model.policy,
+            eval_mode=True
+        )
+
+        env.restore_initial_env_state()
+
+    except rospy.ROSInterruptException:
+        sys.exit(1)

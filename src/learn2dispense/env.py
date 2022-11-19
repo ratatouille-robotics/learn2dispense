@@ -54,6 +54,8 @@ class Environment:
         self.num_episodes = 0
         self.num_batches = 0
         self.mode = "train"
+        assert available_weight is not None or pick_container_on_start, "Cannot avoid picking up container" \
+             "if container weight is not provided"
 
         if self.log_rollout:
             if not os.path.exists(log_dir / "rollout_data"):
@@ -61,14 +63,15 @@ class Environment:
 
         assert self.robot_mg.go_to_joint_state(self.HOME, cartesian_path=False)
 
-        if pick_container_on_start:
-            if available_weight is None:
+        if available_weight is None:
                 self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_1, return_home=True)
                 self.place_container_on_scale()
                 self.pick_container_from_scale()
                 self.place_container_on_shelf(self.CONTAINER_SHELF_POSE_1)
-            else:
-                self.available_weight = available_weight
+        else:
+            self.available_weight = available_weight
+
+        if pick_container_on_start:
             # To start with, pick and place empty container on weighing scale
             self.pick_container_from_shelf(self.CONTAINER_SHELF_POSE_2, return_home=True)
             self.place_container_on_scale()

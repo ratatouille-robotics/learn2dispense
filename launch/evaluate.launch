@@ -1,0 +1,3 @@
+<launch>
+    <node pkg="learn2dispense" type="evaluate.py" name="evaluate" output="screen" />
+</launch>
