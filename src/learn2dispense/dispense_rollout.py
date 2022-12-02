@@ -22,7 +22,7 @@ CONTROL_STEP = 0.005
 MAX_ROT_ACC = np.pi / 4
 MIN_ROT_ACC = -2 * MAX_ROT_ACC
 MAX_ROT_VEL = np.pi / 32
-MIN_ROT_VEL = -2 * MAX_ROT_VEL
+MIN_ROT_VEL = -MAX_ROT_VEL
 
 LEARNING_MAX_VEL = MAX_ROT_VEL / 2
 
@@ -131,10 +131,13 @@ class Dispenser:
         e_dt_pentaly = (self.rollout_data["error_rate"] / 100) ** 2
         e_d2t = np.zeros_like(e_penalty)
         e_d2t[1:] = self.rollout_data["error_rate"][1:] - self.rollout_data["error_rate"][:-1]
-        e_d2t_penalty = (e_d2t / 1000) ** 2
+        e_d2t_penalty = (e_d2t / 200) ** 2
         rewards = -(e_penalty + e_dt_pentaly + e_d2t_penalty)
+        self.e_penalty = np.mean(e_penalty)
+        self.e_dt_pentaly = np.mean(e_dt_pentaly)
+        self.e_d2t_penalty = np.mean(e_d2t_penalty)
         if not self.success:
-            rewards[-10:] *= 10
+            rewards[-10:] *= 2
 
         return rewards
 
@@ -177,6 +180,9 @@ class Dispenser:
                 "dispense_time": self.dispense_time,
                 "requested_wt": self.requested_wt,
                 "dispensed_wt": self.dispensed_wt,
+                "e_penalty": self.e_penalty,
+                "e_dt_penalty": self.e_dt_pentaly,
+                "e_d2t_penalty": self.e_d2t_penalty
             },
             "is_success": self.success
         }
