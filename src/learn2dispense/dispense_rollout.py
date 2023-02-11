@@ -136,7 +136,7 @@ class Dispenser:
         self.e_penalty = np.mean(e_penalty)
         self.e_dt_pentaly = np.mean(e_dt_pentaly)
         self.e_d2t_penalty = np.mean(e_d2t_penalty)
-        if not self.success:
+        if np.abs(self.requested_wt - self.dispensed_wt) > self.ctrl_params["error_threshold"]:
             rewards[-10:] *= 2
 
         return rewards

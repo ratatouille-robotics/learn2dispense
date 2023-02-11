@@ -29,7 +29,7 @@ if __name__ == "__main__":
         )
 
         data, info = env.interact(
-            episode_list=[17, 24, 83, 66, 72, 87, 42, 95, 33, 58],
+            episode_list=[64, 58, 71, 30, 90, 40, 21, 41, 43, 76, 66, 98, 73, 62, 69, 37, 19, 55, 22, 45, 49, 81, 45, 29, 66],
             policy=model.policy,
             eval_mode=True
         )

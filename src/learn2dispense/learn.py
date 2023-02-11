@@ -37,7 +37,7 @@ if __name__ == "__main__":
             lr_scheduler_cls=LambdaLR,
             scheduler_kwargs={"lr_lambda": lambda_schedule}
         )
-        model.learn(total_timesteps=int(1e6))
+        model.learn(total_timesteps=int(5e5))
         env.restore_initial_env_state()
 
     except rospy.ROSInterruptException:
