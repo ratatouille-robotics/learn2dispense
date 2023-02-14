@@ -455,7 +455,7 @@ class PPO(BaseAlgorithm):
             if max_mean_return is None:
                 max_mean_return = curr_mean_return
 
-            if curr_mean_return > max_mean_return:
+            if curr_mean_return >= max_mean_return:
                 max_mean_return = curr_mean_return
                 self.env.reset()
                 rospy.loginfo("New checkpoint with high return. Evaluating the model...")

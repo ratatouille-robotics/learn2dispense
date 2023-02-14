@@ -22,7 +22,7 @@ CONTROL_STEP = 0.005
 MAX_ROT_ACC = np.pi / 4
 MIN_ROT_ACC = -2 * MAX_ROT_ACC
 MAX_ROT_VEL = np.pi / 32
-MIN_ROT_VEL = -MAX_ROT_VEL
+MIN_ROT_VEL = -2 * MAX_ROT_VEL
 
 LEARNING_MAX_VEL = MAX_ROT_VEL / 2
 
@@ -119,6 +119,7 @@ class Dispenser:
 
         self.rollout_data["time"] = []
         if has_policy:
+            self.rollout_data["net_velocity"] = []
             self.rollout_data["action"] = []
             self.rollout_data["deter_action"] = []
             self.rollout_data["action_max_clip"] = []
@@ -130,8 +131,8 @@ class Dispenser:
         e_penalty = (self.rollout_data["error"] / 200) ** 2
         e_dt_pentaly = (self.rollout_data["error_rate"] / 100) ** 2
         e_d2t = np.zeros_like(e_penalty)
-        e_d2t[1:] = self.rollout_data["error_rate"][1:] - self.rollout_data["error_rate"][:-1]
-        e_d2t_penalty = (e_d2t / 200) ** 2
+        e_d2t[1:] = (self.rollout_data["error_rate"][1:] - self.rollout_data["error_rate"][:-1]) / T_STEP
+        e_d2t_penalty = (e_d2t / 2000) ** 2
         rewards = -(e_penalty + e_dt_pentaly + e_d2t_penalty)
         self.e_penalty = np.mean(e_penalty)
         self.e_dt_pentaly = np.mean(e_dt_pentaly)
@@ -167,6 +168,7 @@ class Dispenser:
         outputs["episode_start"][0] = 1
         outputs["time"] = self.rollout_data["time"]
         if has_policy:
+            outputs["net_velocity"] = self.rollout_data["net_velocity"]
             outputs["action"] = self.rollout_data["action"]
             outputs["value"] = self.rollout_data["value"]
             outputs["log_prob"] = self.rollout_data["log_prob"]
@@ -447,6 +449,7 @@ class Dispenser:
 
             self.rollout_data["time"].append(curr_time)
             if policy is not None:
+                self.rollout_data["net_velocity"].append(total_vel)
                 self.rollout_data["action"].append(action)
                 self.rollout_data["deter_action"].append(deter_action.cpu().item())
                 self.rollout_data["action_max_clip"].append(unclipped_total_vel > max_vel)
