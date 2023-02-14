@@ -62,6 +62,8 @@ class Dispenser:
 
     FULL_FILL_WEIGHT = 1400
 
+    CONDITIONAL_LOGS = ["e_penalty", "e_dt_penalty", "e_d2t_penalty"]
+
     def __init__(self, robot_mg: RobotMoveGroup, use_fill_level: bool = False) -> None:
         assert (T_STEP / CONTROL_STEP).is_integer()
         # Setup comm with the weighing scale
@@ -128,17 +130,24 @@ class Dispenser:
             self.rollout_data["log_prob"] = []
 
     def compute_rewards(self) -> np.ndarray:
-        e_penalty = (self.rollout_data["error"] / 200) ** 2
-        e_dt_pentaly = (self.rollout_data["error_rate"] / 100) ** 2
-        e_d2t = np.zeros_like(e_penalty)
+        
+        e_d2t = np.zeros_like(self.rollout_data["error"])
         e_d2t[1:] = (self.rollout_data["error_rate"][1:] - self.rollout_data["error_rate"][:-1]) / T_STEP
-        e_d2t_penalty = (e_d2t / 2000) ** 2
-        rewards = -(e_penalty + e_dt_pentaly + e_d2t_penalty)
+
+        e_penalty = np.maximum(0.01, (self.rollout_data["error"] / 250) ** 2)
+        e_dt_penalty = np.minimum(0.1, (self.rollout_data["error_rate"] / 100) ** 2)
+        e_d2t_penalty = np.minimum(0.1, (e_d2t / 500) ** 2)
+
+        self.rollout_data['e_penalty'] = e_penalty
+        self.rollout_data['e_dt_penalty'] = e_dt_penalty
+        self.rollout_data['e_d2t_penalty'] = e_d2t_penalty
+
+        rewards = -(e_penalty + e_dt_penalty + e_d2t_penalty)
         self.e_penalty = np.mean(e_penalty)
-        self.e_dt_pentaly = np.mean(e_dt_pentaly)
+        self.e_dt_penalty = np.mean(e_dt_penalty)
         self.e_d2t_penalty = np.mean(e_d2t_penalty)
         if np.abs(self.requested_wt - self.dispensed_wt) > self.ctrl_params["error_threshold"]:
-            rewards[-10:] *= 2
+            rewards[-10:] = -0.5
 
         return rewards
 
@@ -174,6 +183,10 @@ class Dispenser:
             outputs["log_prob"] = self.rollout_data["log_prob"]
             outputs["deter_action"] = self.rollout_data["deter_action"]
 
+        for item in self.CONDITIONAL_LOGS:
+            if item in self.rollout_data:
+                outputs[item] = self.rollout_data[item]
+
         info = {
             "episode": {
                 "mean_reward": np.mean(outputs["reward"]),
@@ -183,7 +196,7 @@ class Dispenser:
                 "requested_wt": self.requested_wt,
                 "dispensed_wt": self.dispensed_wt,
                 "e_penalty": self.e_penalty,
-                "e_dt_penalty": self.e_dt_pentaly,
+                "e_dt_penalty": self.e_dt_penalty,
                 "e_d2t_penalty": self.e_d2t_penalty
             },
             "is_success": self.success
