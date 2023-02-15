@@ -46,8 +46,8 @@ class SquashedGaussianDistribution(Distribution):
 
         if self.use_state_dependent_std:
             std_model = nn.Linear(latent_dim, self.action_dim)
-            std_model.weight.data = 0.1 * std_model.weight.data
-            std_model.bias.data = th.ones_like(std_model.bias.data) * std_param_init
+            nn.init.orthogonal_(std_model.weight, gain=0.01)
+            std_model.bias.data.fill_(std_param_init)
         else:
             std_model = nn.Parameter(th.ones(self.action_dim) * std_param_init, requires_grad=True)
 
@@ -117,7 +117,7 @@ class SimplePolicy(ActorCriticPolicy):
         learning_rate: Schedule,
         activation_fn: Type[nn.Module] = nn.Tanh,
         ortho_init: bool = True,
-        log_std_init: float = -0.75,
+        log_std_init: float = -0.36,
         use_state_dependent_std: bool = True,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
