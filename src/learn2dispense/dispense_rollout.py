@@ -130,10 +130,19 @@ class Dispenser:
             self.rollout_data["log_prob"] = []
 
     def compute_rewards(self) -> np.ndarray:
-        
-        rewards = -0.1 * np.ones(len(self.rollout_data["error"]), dtype=np.float32)
-        if not self.success:
-            rewards[-10:] = -5
+
+        e_penalty = (self.rollout_data["error"] / 200) ** 2
+        e_dt_penalty = (self.rollout_data["error_rate"] / 200) ** 2
+
+        self.rollout_data['e_penalty'] = e_penalty
+        self.rollout_data['e_dt_penalty'] = e_dt_penalty
+
+        rewards = -(e_penalty + e_dt_penalty)
+        self.e_penalty = np.mean(e_penalty)
+        self.e_dt_penalty = np.mean(e_dt_penalty)
+
+        if np.abs(self.requested_wt - self.dispensed_wt) > self.ctrl_params["error_threshold"]:
+            rewards[-10:] *= 10
 
         return rewards
 
@@ -181,6 +190,8 @@ class Dispenser:
                 "dispense_time": self.dispense_time,
                 "requested_wt": self.requested_wt,
                 "dispensed_wt": self.dispensed_wt,
+                "e_penalty": self.e_penalty,
+                "e_dt_penalty": self.e_dt_penalty,
             },
             "is_success": self.success
         }
