@@ -131,15 +131,21 @@ class Dispenser:
 
     def compute_rewards(self) -> np.ndarray:
 
+        e_d2t = np.zeros_like(self.rollout_data["error"])
+        e_d2t[1:] = (self.rollout_data["error_rate"][1:] - self.rollout_data["error_rate"][:-1]) / T_STEP
+
         e_penalty = (self.rollout_data["error"] / 200) ** 2
         e_dt_penalty = (self.rollout_data["error_rate"] / 200) ** 2
+        e_d2t_penalty = (e_d2t / 1000) ** 2
 
         self.rollout_data['e_penalty'] = e_penalty
         self.rollout_data['e_dt_penalty'] = e_dt_penalty
+        self.rollout_data['e_d2t_penalty'] = e_d2t_penalty
 
-        rewards = -(e_penalty + e_dt_penalty)
+        rewards = -(e_penalty + e_dt_penalty + e_d2t_penalty)
         self.e_penalty = np.mean(e_penalty)
         self.e_dt_penalty = np.mean(e_dt_penalty)
+        self.e_d2t_penalty = np.mean(e_d2t_penalty)
 
         if np.abs(self.requested_wt - self.dispensed_wt) > self.ctrl_params["error_threshold"]:
             rewards[-10:] *= 10
