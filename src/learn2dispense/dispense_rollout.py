@@ -136,7 +136,7 @@ class Dispenser:
 
         e_penalty = (self.rollout_data["error"] / 200) ** 2
         e_dt_penalty = (self.rollout_data["error_rate"] / 200) ** 2
-        e_d2t_penalty = (e_d2t / 1000) ** 2
+        e_d2t_penalty = (e_d2t / 2000) ** 2
 
         self.rollout_data['e_penalty'] = e_penalty
         self.rollout_data['e_dt_penalty'] = e_dt_penalty
@@ -198,6 +198,7 @@ class Dispenser:
                 "dispensed_wt": self.dispensed_wt,
                 "e_penalty": self.e_penalty,
                 "e_dt_penalty": self.e_dt_penalty,
+                "e_d2t_penalty": self.e_d2t_penalty,
             },
             "is_success": self.success
         }
