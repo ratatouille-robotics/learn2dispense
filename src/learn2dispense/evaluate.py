@@ -7,7 +7,10 @@ from learn2dispense.env import Environment
 from learn2dispense.ppo import PPO
 
 
-LOG_DIR = pathlib.Path(__file__).parent.parent.parent / "eval_logs/baseline"
+RUN_NAME = "learn_dispense"
+
+
+LOG_DIR = pathlib.Path(__file__).parent.parent.parent / f"eval_logs/{RUN_NAME}"
 MODEL_PATH = pathlib.Path(__file__).parent.parent.parent / "logs/learn_dispense_v4/model/best_iter_27"
 AVAILABLE_WT = 1097.5
 
